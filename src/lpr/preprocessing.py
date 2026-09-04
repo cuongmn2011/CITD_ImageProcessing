@@ -29,12 +29,30 @@ def order_quad_points(
 ) -> np.ndarray:
     """Return corners in top-left, top-right, bottom-right, bottom-left order."""
     pts = _as_points(points)
-    top_two, bottom_two = (
-        pts[np.argsort(pts[:, 1], kind="stable")[:2]],
-        pts[np.argsort(pts[:, 1], kind="stable")[2:]],
-    )
-    top_left, top_right = top_two[np.argsort(top_two[:, 0], kind="stable")]
-    bottom_left, bottom_right = bottom_two[np.argsort(bottom_two[:, 0], kind="stable")]
+    center = pts.mean(axis=0)
+    angles = np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0])
+    cycle = pts[np.argsort(angles)]
+
+    left = int(np.lexsort((cycle[:, 1], cycle[:, 0]))[0])
+    right = int(np.lexsort((cycle[:, 1], -cycle[:, 0]))[0])
+
+    def path(start: int, end: int, step: int) -> list[np.ndarray]:
+        indices = [start]
+        while indices[-1] != end:
+            indices.append((indices[-1] + step) % len(cycle))
+        return [cycle[index] for index in indices]
+
+    forward = path(left, right, 1)
+    backward = path(left, right, -1)
+    if np.mean([point[1] for point in forward]) <= np.mean([point[1] for point in backward]):
+        upper, lower = forward, path(right, left, 1)
+    else:
+        upper, lower = backward, path(right, left, -1)
+
+    top_left = upper[1] if len(upper) > 2 else upper[0]
+    top_right = upper[-2] if len(upper) == 4 else upper[-1]
+    bottom_right = lower[1] if len(lower) > 2 else lower[0]
+    bottom_left = lower[-2] if len(lower) == 4 else lower[-1]
     return np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
 
 
