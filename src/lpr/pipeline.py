@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -79,11 +80,18 @@ class LicensePlateRecognizer:
         destination = Path(output_path).resolve()
         if source == destination:
             raise ValueError("Input and output video paths must be different")
+        try:
+            if os.path.exists(destination) and os.path.samefile(source, destination):
+                raise ValueError("Input and output video paths must be different")
+        except FileNotFoundError:
+            pass
         if max_frames is not None and max_frames <= 0:
             raise ValueError("max_frames must be positive when provided")
 
+        destination.parent.mkdir(parents=True, exist_ok=True)
         capture = cv2.VideoCapture(str(source))
         if not capture.isOpened():
+            capture.release()
             raise ValueError(f"Could not open video: {input_path}")
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -93,7 +101,6 @@ class LicensePlateRecognizer:
         fps = float(capture.get(cv2.CAP_PROP_FPS))
         if not np.isfinite(fps) or fps <= 0:
             fps = 25.0
-        destination.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(
             str(destination),
             cv2.VideoWriter_fourcc(*"mp4v"),

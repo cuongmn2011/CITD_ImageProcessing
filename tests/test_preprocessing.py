@@ -59,3 +59,11 @@ def test_order_quad_points_handles_tied_coordinate_scores() -> None:
     assert np.array_equal(
         order_quad_points(points), np.array([[5, 0], [10, 5], [5, 10], [0, 5]], dtype=np.float32)
     )
+
+
+def test_order_quad_points_handles_strong_skew() -> None:
+    points = [[100, 100], [200, 100], [200, 200], [0, 150]]
+    assert np.array_equal(
+        order_quad_points(points),
+        np.array([[100, 100], [200, 100], [200, 200], [0, 150]], dtype=np.float32),
+    )

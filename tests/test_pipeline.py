@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -54,6 +56,16 @@ def test_video_guards_run_before_opening_resources(tmp_path) -> None:
         pipeline.recognize_video(video_path, video_path)
     with pytest.raises(ValueError, match="positive"):
         pipeline.recognize_video(video_path, tmp_path / "output.mp4", max_frames=0)
+
+
+def test_video_rejects_hardlink_aliases(tmp_path) -> None:
+    pipeline = LicensePlateRecognizer(FakeDetector(), [FakeBackend()], variants=("gray",))
+    video_path = tmp_path / "input.mp4"
+    alias_path = tmp_path / "alias.mp4"
+    video_path.write_bytes(b"not a video")
+    os.link(video_path, alias_path)
+    with pytest.raises(ValueError, match="different"):
+        pipeline.recognize_video(video_path, alias_path)
 
 
 def test_annotate_image_returns_copy_with_box() -> None:

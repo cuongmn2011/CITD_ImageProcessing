@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 from typing import Sequence, cast
 
@@ -46,6 +47,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _unit_interval(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be a number") from error
+    if not math.isfinite(parsed) or not 0 <= parsed <= 1:
+        raise argparse.ArgumentTypeError("value must be between 0 and 1")
+    return parsed
+
+
 def _recognizer(args: argparse.Namespace) -> LicensePlateRecognizer:
     detector = YoloPlateDetector(args.model, confidence=args.confidence, device=args.device)
     backends = [_backend(name, args.gpu) for name in args.ocr]
@@ -66,7 +77,7 @@ def _add_pipeline_arguments(parser: argparse.ArgumentParser) -> None:
         help="Comma-separated preprocessing variants",
     )
     parser.add_argument("--confidence", type=float, default=0.4)
-    parser.add_argument("--padding", type=float, default=0.08)
+    parser.add_argument("--padding", type=_unit_interval, default=0.08)
     parser.add_argument("--device", default=None, help="YOLO device, for example 0 or cpu")
     parser.add_argument("--gpu", action="store_true", help="Use GPU for EasyOCR")
 

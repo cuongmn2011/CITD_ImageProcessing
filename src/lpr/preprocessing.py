@@ -29,11 +29,13 @@ def order_quad_points(
 ) -> np.ndarray:
     """Return corners in top-left, top-right, bottom-right, bottom-left order."""
     pts = _as_points(points)
-    center = pts.mean(axis=0)
-    angles = np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0])
-    ordered = pts[np.argsort(angles)]
-    start = int(np.argmin(ordered.sum(axis=1)))
-    return np.roll(ordered, -start, axis=0)
+    top_two, bottom_two = (
+        pts[np.argsort(pts[:, 1], kind="stable")[:2]],
+        pts[np.argsort(pts[:, 1], kind="stable")[2:]],
+    )
+    top_left, top_right = top_two[np.argsort(top_two[:, 0], kind="stable")]
+    bottom_left, bottom_right = bottom_two[np.argsort(bottom_two[:, 0], kind="stable")]
+    return np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
 
 
 def rectify_plate(

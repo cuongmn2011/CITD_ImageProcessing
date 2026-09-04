@@ -69,3 +69,19 @@ def test_cli_parses_and_validates_variants_before_runtime() -> None:
                 " ",
             ]
         )
+
+
+def test_cli_rejects_invalid_padding_before_runtime() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "infer-image",
+                "--image",
+                "image.jpg",
+                "--model",
+                "best.pt",
+                "--padding",
+                "1.5",
+            ]
+        )
