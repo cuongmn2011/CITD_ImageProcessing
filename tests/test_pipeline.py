@@ -1,5 +1,5 @@
-import cv2
 import numpy as np
+import pytest
 
 from lpr.detector import PlateDetection
 from lpr.ocr import OCRResult
@@ -42,9 +42,25 @@ def test_pipeline_rejects_empty_backend_list() -> None:
         raise AssertionError("Expected ValueError")
 
 
+def test_pipeline_rejects_invalid_variants() -> None:
+    with pytest.raises(ValueError, match="Unknown preprocessing"):
+        LicensePlateRecognizer(FakeDetector(), [FakeBackend()], variants=("nope",))
+
+
+def test_video_guards_run_before_opening_resources(tmp_path) -> None:
+    pipeline = LicensePlateRecognizer(FakeDetector(), [FakeBackend()], variants=("gray",))
+    video_path = tmp_path / "input.mp4"
+    with pytest.raises(ValueError, match="different"):
+        pipeline.recognize_video(video_path, video_path)
+    with pytest.raises(ValueError, match="positive"):
+        pipeline.recognize_video(video_path, tmp_path / "output.mp4", max_frames=0)
+
+
 def test_annotate_image_returns_copy_with_box() -> None:
     image = np.zeros((30, 40, 3), dtype=np.uint8)
-    recognition = PlateRecognition(PlateDetection((5, 5, 20, 20), 0.9), OCRResult("29A12345", 0.8, "fake"))
+    recognition = PlateRecognition(
+        PlateDetection((5, 5, 20, 20), 0.9), OCRResult("29A12345", 0.8, "fake")
+    )
     annotated = annotate_image(image, [recognition])
     assert annotated.shape == image.shape
     assert not np.array_equal(annotated, image)

@@ -8,9 +8,12 @@ import cv2
 import numpy as np
 
 PreprocessVariant = Literal["raw", "gray", "otsu", "adaptive", "clahe"]
+PREPROCESS_VARIANTS: tuple[PreprocessVariant, ...] = ("raw", "gray", "otsu", "adaptive", "clahe")
 
 
-def _as_points(points: np.ndarray | list[list[float]] | tuple[tuple[float, float], ...]) -> np.ndarray:
+def _as_points(
+    points: np.ndarray | list[list[float]] | tuple[tuple[float, float], ...],
+) -> np.ndarray:
     array = np.asarray(points, dtype=np.float32)
     if array.shape != (4, 2):
         raise ValueError(f"Expected four 2D points, got shape {array.shape}")
@@ -26,14 +29,11 @@ def order_quad_points(
 ) -> np.ndarray:
     """Return corners in top-left, top-right, bottom-right, bottom-left order."""
     pts = _as_points(points)
-    ordered = np.empty((4, 2), dtype=np.float32)
-    sums = pts.sum(axis=1)
-    differences = np.diff(pts, axis=1).ravel()
-    ordered[0] = pts[np.argmin(sums)]
-    ordered[2] = pts[np.argmax(sums)]
-    ordered[1] = pts[np.argmin(differences)]
-    ordered[3] = pts[np.argmax(differences)]
-    return ordered
+    center = pts.mean(axis=0)
+    angles = np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0])
+    ordered = pts[np.argsort(angles)]
+    start = int(np.argmin(ordered.sum(axis=1)))
+    return np.roll(ordered, -start, axis=0)
 
 
 def rectify_plate(
@@ -58,7 +58,12 @@ def rectify_plate(
         raise ValueError("Quadrilateral must have non-zero width and height")
 
     destination = np.array(
-        [[0, 0], [output_width - 1, 0], [output_width - 1, output_height - 1], [0, output_height - 1]],
+        [
+            [0, 0],
+            [output_width - 1, 0],
+            [output_width - 1, output_height - 1],
+            [0, output_height - 1],
+        ],
         dtype=np.float32,
     )
     transform = cv2.getPerspectiveTransform(
@@ -68,7 +73,9 @@ def rectify_plate(
     return cv2.warpPerspective(image, transform, (output_width, output_height))
 
 
-def crop_box(image: np.ndarray, box: tuple[float, float, float, float], padding: float = 0.08) -> np.ndarray:
+def crop_box(
+    image: np.ndarray, box: tuple[float, float, float, float], padding: float = 0.08
+) -> np.ndarray:
     """Crop and clamp an xyxy box, adding proportional padding around the plate."""
     if image is None or image.size == 0:
         raise ValueError("Image must be non-empty")
@@ -108,27 +115,47 @@ def resize_for_ocr(image: np.ndarray, target_height: int = 64, max_width: int = 
     return cv2.resize(image, (output_width, output_height), interpolation=interpolation)
 
 
-def preprocess_plate(image: np.ndarray, variant: PreprocessVariant = "otsu") -> np.ndarray:
-    """Apply one deterministic OCR preprocessing variant."""
-    if image is None or image.size == 0:
-        raise ValueError("Image must be non-empty")
-    if variant not in {"raw", "gray", "otsu", "adaptive", "clahe"}:
-        raise ValueError(f"Unknown preprocessing variant: {variant}")
+def _to_gray(image: np.ndarray) -> np.ndarray:
+    if image.ndim == 2:
+        return image
+    if image.ndim != 3:
+        raise ValueError(f"Expected a 2D or 3D image, got {image.ndim} dimensions")
+    channels = image.shape[2]
+    if channels == 1:
+        return image[:, :, 0]
+    if channels == 3:
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if channels == 4:
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+    raise ValueError(f"Unsupported image channel count: {channels}")
 
-    resized = resize_for_ocr(image)
+
+def _preprocess_resized(image: np.ndarray, variant: PreprocessVariant) -> np.ndarray:
     if variant == "raw":
-        return resized
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if resized.ndim == 3 else resized
+        return image
+    gray = _to_gray(image)
     if variant == "gray":
         return gray
     if variant == "otsu":
         return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     if variant == "adaptive":
-        return cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        return cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
     enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
     return cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
 
+def preprocess_plate(image: np.ndarray, variant: PreprocessVariant = "otsu") -> np.ndarray:
+    """Apply one deterministic OCR preprocessing variant."""
+    if image is None or image.size == 0:
+        raise ValueError("Image must be non-empty")
+    if variant not in PREPROCESS_VARIANTS:
+        raise ValueError(f"Unknown preprocessing variant: {variant}")
+    return _preprocess_resized(resize_for_ocr(image), variant)
+
+
 def generate_variants(image: np.ndarray) -> dict[PreprocessVariant, np.ndarray]:
-    """Generate all supported variants for OCR ensemble experiments."""
-    return {variant: preprocess_plate(image, variant) for variant in ("raw", "gray", "otsu", "adaptive", "clahe")}
+    """Generate all supported variants after one shared resize operation."""
+    resized = resize_for_ocr(image)
+    return {variant: _preprocess_resized(resized, variant) for variant in PREPROCESS_VARIANTS}

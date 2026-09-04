@@ -1,13 +1,22 @@
-import cv2
 import numpy as np
 import pytest
 
-from lpr.preprocessing import crop_box, generate_variants, order_quad_points, preprocess_plate, rectify_plate, resize_for_ocr
+from lpr.preprocessing import (
+    crop_box,
+    generate_variants,
+    order_quad_points,
+    preprocess_plate,
+    rectify_plate,
+    resize_for_ocr,
+)
 
 
 def test_order_quad_points_returns_clockwise_rectangle() -> None:
     points = [[90, 80], [10, 10], [100, 20], [0, 70]]
-    assert np.array_equal(order_quad_points(points), np.array([[10, 10], [100, 20], [90, 80], [0, 70]], dtype=np.float32))
+    assert np.array_equal(
+        order_quad_points(points),
+        np.array([[10, 10], [100, 20], [90, 80], [0, 70]], dtype=np.float32),
+    )
 
 
 def test_order_quad_points_rejects_duplicate_points() -> None:
@@ -38,3 +47,15 @@ def test_resize_and_variants_keep_non_empty_output() -> None:
     assert set(variants) == {"raw", "gray", "otsu", "adaptive", "clahe"}
     assert all(value.size > 0 for value in variants.values())
     assert preprocess_plate(image, "gray").ndim == 2
+
+
+def test_single_channel_images_are_supported() -> None:
+    image = np.full((10, 30, 1), 120, dtype=np.uint8)
+    assert preprocess_plate(image, "gray").shape == (64, 192)
+
+
+def test_order_quad_points_handles_tied_coordinate_scores() -> None:
+    points = [[5, 0], [10, 5], [5, 10], [0, 5]]
+    assert np.array_equal(
+        order_quad_points(points), np.array([[5, 0], [10, 5], [5, 10], [0, 5]], dtype=np.float32)
+    )

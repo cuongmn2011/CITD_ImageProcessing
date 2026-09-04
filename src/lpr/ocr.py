@@ -65,12 +65,18 @@ class TesseractBackend:
 
     def recognize(self, image: np.ndarray) -> OCRResult:
         _validate_image(image)
-        data = self._pytesseract.image_to_data(
-            image,
-            lang=self.language,
-            config=f"--psm {self.page_segmentation_mode} -c tessedit_char_whitelist={_ALLOWED_CHARACTERS}",
-            output_type=self._pytesseract.Output.DICT,
-        )
+        try:
+            data = self._pytesseract.image_to_data(
+                image,
+                lang=self.language,
+                config=(
+                    f"--psm {self.page_segmentation_mode} "
+                    f"-c tessedit_char_whitelist={_ALLOWED_CHARACTERS}"
+                ),
+                output_type=self._pytesseract.Output.DICT,
+            )
+        except self._pytesseract.TesseractNotFoundError as error:
+            raise RuntimeError("Tesseract binary is not installed or not on PATH") from error
         texts: list[str] = []
         confidences: list[float] = []
         for raw_text, raw_confidence in zip(data.get("text", []), data.get("conf", [])):
@@ -83,7 +89,12 @@ class TesseractBackend:
                 texts.append(text)
                 confidences.append(confidence / 100.0)
         raw_text = " ".join(texts)
-        return OCRResult(normalize_text(raw_text), float(np.mean(confidences)) if confidences else 0.0, self.name, raw_text)
+        return OCRResult(
+            normalize_text(raw_text),
+            float(np.mean(confidences)) if confidences else 0.0,
+            self.name,
+            raw_text,
+        )
 
 
 class EasyOCRBackend:
@@ -105,10 +116,19 @@ class EasyOCRBackend:
             allowlist=_ALLOWED_CHARACTERS,
         )
         ordered = sorted(detections, key=lambda item: min(point[0] for point in item[0]))
-        texts = [str(item[1]).strip() for item in ordered if len(item) >= 3 and str(item[1]).strip()]
-        confidences = [float(item[2]) for item in ordered if len(item) >= 3 and str(item[1]).strip()]
+        texts = [
+            str(item[1]).strip() for item in ordered if len(item) >= 3 and str(item[1]).strip()
+        ]
+        confidences = [
+            float(item[2]) for item in ordered if len(item) >= 3 and str(item[1]).strip()
+        ]
         raw_text = " ".join(texts)
-        return OCRResult(normalize_text(raw_text), float(np.mean(confidences)) if confidences else 0.0, self.name, raw_text)
+        return OCRResult(
+            normalize_text(raw_text),
+            float(np.mean(confidences)) if confidences else 0.0,
+            self.name,
+            raw_text,
+        )
 
 
 class PaddleOCRBackend:
@@ -135,16 +155,31 @@ class PaddleOCRBackend:
             return OCRResult("", 0.0, self.name)
         texts, scores = _paddle_text_and_scores(prediction)
         raw_text = " ".join(texts)
-        return OCRResult(normalize_text(raw_text), float(np.mean(scores)) if scores else 0.0, self.name, raw_text)
+        return OCRResult(
+            normalize_text(raw_text), float(np.mean(scores)) if scores else 0.0, self.name, raw_text
+        )
 
 
 def _paddle_text_and_scores(prediction: Any) -> tuple[list[str], list[float]]:
     """Handle PaddleOCR result objects and dicts without binding pipeline internals."""
+
     def get(name: str, default: Any) -> Any:
         if isinstance(prediction, dict):
             return prediction.get(name, default)
         return getattr(prediction, name, default)
 
-    texts = [str(text).strip() for text in get("rec_texts", []) if str(text).strip()]
-    scores = [float(score) for score in get("rec_scores", [])[: len(texts)]]
-    return texts, scores
+    raw_texts = list(get("rec_texts", []) or [])
+    raw_scores = list(get("rec_scores", []) or [])
+    pairs: list[tuple[str, float]] = []
+    for index, raw_text in enumerate(raw_texts):
+        if raw_text is None:
+            continue
+        text = str(raw_text).strip()
+        if not text:
+            continue
+        try:
+            score = float(raw_scores[index]) if index < len(raw_scores) else 0.0
+        except (TypeError, ValueError):
+            score = 0.0
+        pairs.append((text, score))
+    return [text for text, _ in pairs], [score for _, score in pairs]

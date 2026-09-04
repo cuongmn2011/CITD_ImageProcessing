@@ -11,7 +11,7 @@ import numpy as np
 
 from .detector import PlateDetection
 from .ocr import OCRBackend, OCRResult, best_result
-from .preprocessing import PreprocessVariant, preprocess_plate
+from .preprocessing import PREPROCESS_VARIANTS, PreprocessVariant, generate_variants
 
 
 class Detector(Protocol):
@@ -47,6 +47,9 @@ class LicensePlateRecognizer:
             raise ValueError("At least one OCR backend is required")
         if not self.variants:
             raise ValueError("At least one preprocessing variant is required")
+        invalid_variants = set(self.variants) - set(PREPROCESS_VARIANTS)
+        if invalid_variants:
+            raise ValueError(f"Unknown preprocessing variants: {sorted(invalid_variants)}")
         if not 0 <= crop_padding <= 1:
             raise ValueError("crop_padding must be between 0 and 1")
 
@@ -56,11 +59,11 @@ class LicensePlateRecognizer:
         recognitions: list[PlateRecognition] = []
         for detection in self.detector.detect(image):
             crop = self.detector.crop(image, detection, padding=self.crop_padding)
+            variants = generate_variants(crop)
             candidates: list[OCRResult] = []
             for variant in self.variants:
-                processed = preprocess_plate(crop, variant)
                 for backend in self.backends:
-                    result = backend.recognize(processed)
+                    result = backend.recognize(variants[variant])
                     candidates.append(replace(result, variant=variant))
             recognitions.append(PlateRecognition(detection, best_result(candidates)))
         return recognitions
@@ -72,14 +75,27 @@ class LicensePlateRecognizer:
         max_frames: int | None = None,
     ) -> int:
         """Process a video and write annotated frames; return processed frame count."""
-        capture = cv2.VideoCapture(str(input_path))
+        source = Path(input_path).resolve()
+        destination = Path(output_path).resolve()
+        if source == destination:
+            raise ValueError("Input and output video paths must be different")
+        if max_frames is not None and max_frames <= 0:
+            raise ValueError("max_frames must be positive when provided")
+
+        capture = cv2.VideoCapture(str(source))
         if not capture.isOpened():
             raise ValueError(f"Could not open video: {input_path}")
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
+        if width <= 0 or height <= 0:
+            capture.release()
+            raise ValueError(f"Video has invalid dimensions: {input_path}")
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+        if not np.isfinite(fps) or fps <= 0:
+            fps = 25.0
+        destination.parent.mkdir(parents=True, exist_ok=True)
         writer = cv2.VideoWriter(
-            str(output_path),
+            str(destination),
             cv2.VideoWriter_fourcc(*"mp4v"),
             fps,
             (width, height),
@@ -115,9 +131,26 @@ def annotate_image(image: np.ndarray, recognitions: Iterable[PlateRecognition]) 
         if recognition.ocr is None or not recognition.ocr.text:
             continue
         label = f"{recognition.ocr.text} ({recognition.ocr.confidence:.2f})"
-        (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1
+        )
         label_top = max(0, y1 - text_height - baseline - 4)
         label_right = min(width, x1 + text_width + 6)
-        cv2.rectangle(annotated, (x1, label_top), (label_right, max(y1, text_height + baseline)), (0, 220, 0), -1)
-        cv2.putText(annotated, label, (x1 + 3, max(text_height + 1, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.rectangle(
+            annotated,
+            (x1, label_top),
+            (label_right, max(y1, text_height + baseline)),
+            (0, 220, 0),
+            -1,
+        )
+        cv2.putText(
+            annotated,
+            label,
+            (x1 + 3, max(text_height + 1, y1 - 4)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
     return annotated

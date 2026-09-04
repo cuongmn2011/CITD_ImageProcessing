@@ -15,7 +15,10 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
-    from ultralytics import YOLO
+    try:
+        from ultralytics import YOLO
+    except ImportError as error:
+        raise RuntimeError("Install YOLO support with: uv sync --extra vision") from error
 
     model = YOLO(args.model)
     train_args = {

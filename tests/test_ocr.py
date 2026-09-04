@@ -1,5 +1,4 @@
-
-from lpr.ocr import OCRResult, best_result, normalize_text
+from lpr.ocr import OCRResult, _paddle_text_and_scores, best_result, normalize_text
 
 
 def test_normalize_text_removes_separators_and_noise() -> None:
@@ -24,3 +23,7 @@ def test_valid_plate_format_is_exposed() -> None:
     assert not OCRResult("ABC", 0.8, "test").valid_plate_format
 
 
+def test_paddle_text_and_scores_stay_aligned() -> None:
+    texts, scores = _paddle_text_and_scores({"rec_texts": ["", "ABC"], "rec_scores": [0.1, 0.9]})
+    assert texts == ["ABC"]
+    assert scores == [0.9]
