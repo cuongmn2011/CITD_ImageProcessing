@@ -25,6 +25,13 @@ class EmptyBox:
     conf = [Scalar(0.5)]
     cls = [Scalar(0)]
     id = None
+ 
+class OutsideBox:
+    xyxy = [SimpleNamespace(tolist=lambda: [-20, -10, -5, -1])]
+    conf = [Scalar(0.5)]
+    cls = [Scalar(0)]
+    id = None
+
 
 
 def test_detections_are_clamped_and_normalized() -> None:
@@ -37,6 +44,10 @@ def test_detections_are_clamped_and_normalized() -> None:
 
 def test_invalid_boxes_are_ignored() -> None:
     result = SimpleNamespace(boxes=[EmptyBox()])
+    assert detections_from_result(result, (10, 15, 3)) == []
+
+def test_boxes_outside_image_are_ignored() -> None:
+    result = SimpleNamespace(boxes=[OutsideBox()])
     assert detections_from_result(result, (10, 15, 3)) == []
 
 

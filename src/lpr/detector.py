@@ -33,8 +33,10 @@ def detections_from_result(result: Any, image_shape: tuple[int, ...]) -> list[Pl
         if coordinates.size != 4 or not np.isfinite(coordinates).all():
             continue
         x1, y1, x2, y2 = coordinates
-        x1, x2 = sorted((max(0, int(x1)), min(width, int(x2))))
-        y1, y2 = sorted((max(0, int(y1)), min(height, int(y2))))
+        left, right = sorted((int(x1), int(x2)))
+        top, bottom = sorted((int(y1), int(y2)))
+        x1, x2 = max(0, left), min(width, right)
+        y1, y2 = max(0, top), min(height, bottom)
         if x2 <= x1 or y2 <= y1:
             continue
         confidence = float(box.conf[0].item()) if getattr(box, "conf", None) is not None else 0.0
