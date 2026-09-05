@@ -1,0 +1,9 @@
+# Runtime Roboflow training downloads use the generated data.yaml directly.
+# This file remains the manual-data fallback for --no-download-dataset.
+path: data/processed/license-plates
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: license_plate
