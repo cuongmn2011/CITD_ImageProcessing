@@ -155,6 +155,8 @@ uv lock --check
 - [Architecture and implementation](docs/architecture-and-implementation.md)
 - [Dataset runtime integration](docs/dataset-runtime-integration.md)
 - [Project journal and final-report guide](docs/project-journal.md)
+- [Colab/Kaggle training notebook](notebooks/train_pipeline_colab_kaggle.ipynb)
+- [Delivery and merge order](docs/delivery-and-merge-order.md)
 
 ## Current limitations
 
