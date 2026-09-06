@@ -112,18 +112,44 @@ def validate_yolo_export(location: str | Path) -> Path:
     train_images = (yaml_root / train_entry).resolve()
     validation_images = (yaml_root / validation_entry).resolve()
     expected_train = (export_root / "train" / "images").resolve()
-    expected_validation = next(
+    validation_split = next(
         (
-            (export_root / split / "images").resolve()
+            split
             for split in ("val", "valid")
             if (export_root / split / "images").is_dir()
         ),
         None,
     )
-    if train_images != expected_train or validation_images != expected_validation:
-        raise DatasetPreparationError(
-            "YOLO data YAML paths do not match the exported train/validation directories"
-        )
+    expected_validation = (
+        (export_root / validation_split / "images").resolve()
+        if validation_split is not None
+        else None
+    )
+    train_matches = train_images == expected_train
+    validation_matches = validation_images == expected_validation
+    if not train_matches or not validation_matches:
+        train_tail_matches = Path(train_entry).parts[-2:] == ("train", "images")
+        validation_tail_matches = Path(validation_entry).parts[-2:] in {
+            ("val", "images"),
+            ("valid", "images"),
+        }
+        if (
+            expected_validation is None
+            or not train_tail_matches
+            or not validation_tail_matches
+        ):
+            raise DatasetPreparationError(
+                "YOLO data YAML paths do not match the exported train/validation directories"
+            )
+        payload["path"] = "."
+        payload["train"] = "train/images"
+        payload["val"] = f"{validation_split}/images"
+        payload.pop("valid", None)
+        data_yaml.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        train_images = expected_train
+        validation_images = expected_validation
+    if expected_validation is None:
+        raise DatasetPreparationError("YOLO export has no validation images directory")
 
     train_labels = expected_train.parent / "labels"
     validation_labels = expected_validation.parent / "labels"
