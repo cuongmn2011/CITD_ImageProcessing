@@ -52,9 +52,18 @@ def test_validate_yolo_export_normalizes_parent_relative_roboflow_paths(tmp_path
     assert validate_yolo_export(tmp_path) == (tmp_path / "data.yaml").resolve()
 
     normalized = (tmp_path / "data.yaml").read_text(encoding="utf-8")
-    assert "path: ." in normalized
+    assert f"path: {tmp_path.resolve()}" in normalized
     assert "train: train/images" in normalized
     assert "val: valid/images" in normalized
+
+
+def test_validate_yolo_export_rewrites_relative_root_for_ultralytics(tmp_path) -> None:
+    _write_yolo_export(tmp_path)
+
+    assert validate_yolo_export(tmp_path) == (tmp_path / "data.yaml").resolve()
+
+    normalized = (tmp_path / "data.yaml").read_text(encoding="utf-8")
+    assert f"path: {tmp_path.resolve()}" in normalized
 
 
 def test_force_rejects_project_directory(tmp_path, monkeypatch) -> None:

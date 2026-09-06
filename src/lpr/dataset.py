@@ -127,6 +127,12 @@ def validate_yolo_export(location: str | Path) -> Path:
     )
     train_matches = train_images == expected_train
     validation_matches = validation_images == expected_validation
+    paths_need_normalization = (
+        payload.get("path") != str(export_root)
+        or payload.get("train") != "train/images"
+        or payload.get("val") != f"{validation_split}/images"
+        or "valid" in payload
+    )
     if not train_matches or not validation_matches:
         train_tail_matches = Path(train_entry).parts[-2:] == ("train", "images")
         validation_tail_matches = Path(validation_entry).parts[-2:] in {
@@ -141,7 +147,10 @@ def validate_yolo_export(location: str | Path) -> Path:
             raise DatasetPreparationError(
                 "YOLO data YAML paths do not match the exported train/validation directories"
             )
-        payload["path"] = "."
+    if paths_need_normalization:
+        if expected_validation is None:
+            raise DatasetPreparationError("YOLO export has no validation images directory")
+        payload["path"] = str(export_root)
         payload["train"] = "train/images"
         payload["val"] = f"{validation_split}/images"
         payload.pop("valid", None)
