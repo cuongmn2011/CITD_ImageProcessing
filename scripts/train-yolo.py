@@ -36,6 +36,12 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", default="-1")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Data-loader workers; use 0 in hosted notebooks while building label caches",
+    )
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
@@ -64,6 +70,8 @@ def main() -> None:
         "imgsz": args.imgsz,
         "batch": int(args.batch) if args.batch.lstrip("-").isdigit() else args.batch,
     }
+    if args.workers is not None:
+        train_args["workers"] = args.workers
     if args.device is not None:
         train_args["device"] = args.device
     model.train(**train_args)
