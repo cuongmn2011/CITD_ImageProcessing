@@ -14,7 +14,7 @@ import cv2
 from .detector import YoloPlateDetector
 from .metrics import evaluate_ocr_pairs
 from .ocr import EasyOCRBackend, OCRBackend, PaddleOCRBackend, TesseractBackend
-from .pipeline import LicensePlateRecognizer
+from .pipeline import LicensePlateRecognizer, annotate_image
 from .preprocessing import PREPROCESS_VARIANTS, PreprocessVariant
 
 
@@ -88,6 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     image = subparsers.add_parser("infer-image", help="Recognize plates in one image")
     image.add_argument("--image", required=True)
+    image.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path for an annotated image with detection boxes and OCR text",
+    )
     _add_pipeline_arguments(image)
 
     video = subparsers.add_parser("infer-video", help="Recognize plates in a video")
@@ -116,6 +122,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if image is None:
             raise SystemExit(f"Could not read image: {args.image}")
         results = pipeline.recognize_image(image)
+        if args.output is not None:
+            output_path = args.output.expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            annotated = annotate_image(image, results)
+            if not cv2.imwrite(str(output_path), annotated):
+                raise SystemExit(f"Could not write annotated image: {output_path}")
         print(
             json.dumps(
                 [
