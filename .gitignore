@@ -6,6 +6,12 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
+# Local synchronization metadata
+.stfolder/
+
+# Generated local training run snapshot
+run/
+
 # Local data and model artifacts
 data/raw/
 data/processed/
