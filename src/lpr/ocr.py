@@ -38,12 +38,11 @@ def normalize_text(text: str) -> str:
 
 
 def best_result(results: list[OCRResult]) -> OCRResult | None:
-    """Prefer valid plate-shaped output, then confidence, without inventing text."""
+    """Return the highest-confidence result that matches the plate format."""
     if not results:
         return None
     valid = [result for result in results if result.valid_plate_format]
-    candidates = valid or results
-    return max(candidates, key=lambda result: result.confidence)
+    return max(valid, key=lambda result: result.confidence) if valid else None
 
 
 def _validate_image(image: np.ndarray) -> None:
@@ -54,7 +53,7 @@ def _validate_image(image: np.ndarray) -> None:
 class TesseractBackend:
     name = "tesseract"
 
-    def __init__(self, language: str = "eng", page_segmentation_mode: int = 7) -> None:
+    def __init__(self, language: str = "eng", page_segmentation_mode: int = 6) -> None:
         self.language = language
         self.page_segmentation_mode = page_segmentation_mode
         try:
