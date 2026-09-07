@@ -19,7 +19,7 @@ BASE_PACKAGES = (
 )
 VISION_PACKAGES = (
     ("ultralytics", "ultralytics"),
-    ("ultralytics_thop", "ultralytics-thop"),
+    ("thop", "ultralytics-thop"),
 )
 OCR_PACKAGES = (("pytesseract", "pytesseract"),)
 
@@ -115,7 +115,7 @@ def main() -> int:
         "torch",
         "torchvision",
         "ultralytics",
-        "ultralytics_thop",
+        "thop",
         "pytesseract",
     ]
     if args.mode == "train":
