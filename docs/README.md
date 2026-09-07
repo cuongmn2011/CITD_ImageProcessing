@@ -33,6 +33,11 @@ This directory contains the project evidence and operating documentation. Source
 6. [Colab/Kaggle training notebook](../notebooks/train_pipeline.ipynb)
    - Thin orchestration layer for clone, install, dataset preparation, training, inference, and optional OCR evaluation.
 
+7. [Kaggle train-to-demo runbook](kaggle-train-to-demo.md)
+   - Fresh retraining from Roboflow through `train_pipeline.ipynb`.
+   - Model/artifact replacement workflow.
+   - Inference and video/image demo with `inference_pipeline.ipynb`.
+
 ## Evidence policy
 
 - Claims about behavior must point to source files, tests, or command output.
