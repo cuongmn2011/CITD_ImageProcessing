@@ -33,6 +33,16 @@ This directory contains the project evidence and operating documentation. Source
 6. [Colab/Kaggle training notebook](../notebooks/train_pipeline.ipynb)
    - Thin orchestration layer for clone, install, dataset preparation, training, inference, and optional OCR evaluation.
 
+7. [Code review and training report](code-review-and-training-report.md)
+   - Full source scan, static/security checks, test and coverage evidence.
+   - Findings ranked by severity with source evidence and recommendations.
+   - Observed YOLO training configuration and validation metrics.
+
+8. [Academic final report](final-report-academic.md)
+   - Detailed academic structure from problem statement to conclusion.
+   - Project architecture, training flow, inference flow, and sequence diagrams.
+   - Methodology, equations, observed training results, limitations, and future work.
+
 ## Evidence policy
 
 - Claims about behavior must point to source files, tests, or command output.

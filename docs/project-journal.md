@@ -65,31 +65,32 @@ Full research evidence is in [research-dataset-selection.md](research-dataset-se
 
 ## 4. Verification evidence
 
-Latest local verification:
+Latest local verification is maintained in [code-review-and-training-report.md](code-review-and-training-report.md):
 
-```text
-36 tests passed
-ruff check: passed
-python -m compileall -q src scripts: passed
-uv lock --check: passed
-Roboflow and YAML runtime imports: passed
-```
+- 45 tests passed.
+- `ruff check src tests scripts`: passed.
+- `python -m compileall -q src scripts`: passed.
+- `uv lock --check`: passed.
+- Notebook code cells compile successfully without executing hosted-runtime cells.
+- Training archive integrity check passed.
+- `best.pt` loads as an Ultralytics detection model with one `plate` class.
+- Detector validation metrics are recorded from the real `run/results.csv` artifact.
+- No OCR/end-to-end metric is inferred from detector metrics.
 
-The feature was also independently reviewed for cache safety, manifest path confinement, YAML split validation, and forced replacement behavior.
 
 ## 5. What is not yet claimed
 
-The following claims require an actual dataset download and training run:
+The training artifact now provides detector validation evidence. The following claims still require additional measured experiments:
 
 - Number of usable images after validation.
-- Train/validation/test counts.
-- Detector precision, recall, mAP50, and mAP50-95.
+- Train/validation/test counts and class distribution.
+- Independent test-split detector metrics.
 - OCR exact accuracy, character accuracy, and CER on a held-out set.
 - End-to-end frame throughput.
 - Comparison between OCR backends.
 - Error analysis by one-line/two-line plate, blur, angle, weather, and lighting.
 
-Do not add invented values to the final report. Record command output and generated metric files after the experiment is run.
+Do not add invented values to the final report. Record command output and generated metric files after the experiment is run. The current measured detector results and review findings are in [code-review-and-training-report.md](code-review-and-training-report.md).
 
 ## 6. Recommended final experiment protocol
 
