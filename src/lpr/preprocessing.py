@@ -182,8 +182,10 @@ def generate_variants(
     """Generate only requested variants after one shared resize operation."""
     if image is None or image.size == 0:
         raise ValueError("Image must be non-empty")
+    if not variants:
+        raise ValueError("At least one preprocessing variant is required")
     invalid = set(variants) - set(PREPROCESS_VARIANTS)
-    if not variants or invalid:
+    if invalid:
         raise ValueError(f"Unknown preprocessing variants: {sorted(invalid)}")
     resized = resize_for_ocr(image)
     return {variant: _preprocess_resized(resized, variant) for variant in variants}

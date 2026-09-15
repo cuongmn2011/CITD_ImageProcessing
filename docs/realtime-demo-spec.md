@@ -23,7 +23,7 @@ React on local/Vercel
   -> hidden canvas samples local video
   -> HTTPS/WSS tunnel
 FastAPI on Colab GPU
-  -> bounded single-frame queue
+  -> one in-flight frame per session
   -> YOLO detection + ByteTrack
   -> OCR gate/cache + temporal voting
   -> JSON FrameResult
@@ -75,12 +75,12 @@ The browser connects directly to the GPU API. Vercel serverless functions are no
 }
 ```
 
-The server uses the transmitted frame dimensions for `bbox_norm`; the source video dimensions are metadata only.
+The server uses the decoded JPEG dimensions for `bbox_norm`; the source video dimensions and frame metadata are validation metadata only.
 
 ## Realtime behavior
 
-- React sends at most one frame in flight.
-- The API keeps at most one queued frame and drops stale work when necessary.
+- React sends at most one frame in flight; the sender skips capture attempts while JPEG encoding is busy.
+- The API rejects additional sessions while one demo session is active.
 - YOLO uses the configured `imgsz`; Colab GPU should be benchmarked at 640 first.
 - OCR uses one selected GPU backend and one preprocessing variant on the realtime path.
 - OCR runs for new or unstable tracks and refreshes after a configurable interval.
@@ -152,7 +152,7 @@ Vercel settings:
 - Bboxes update while playback is running; no full-video upload is required.
 - Plate table has one row per current track, not one row per frame.
 - Stable event history and CSV export are available in the browser.
-- Overlay, table, round-trip latency, inference FPS, target FPS, and dropped frames are visible.
+- Overlay, table, round-trip latency, inference FPS, target FPS, and server-reported dropped frames are visible; with one in-flight frame, the latter is normally zero.
 - API disconnect, invalid model, invalid JPEG, and timeout states are visible.
 - A benchmark run with one session reaches p95 glass-to-overlay latency below 500 ms on the selected videos, or the measured limitation is reported instead of hidden.
 

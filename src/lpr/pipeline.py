@@ -60,13 +60,20 @@ class LicensePlateRecognizer:
         recognitions: list[PlateRecognition] = []
         for detection in self.detector.detect(image):
             crop = self.detector.crop(image, detection, padding=self.crop_padding)
-            variants = generate_variants(crop)
+            variants = generate_variants(crop, self.variants)
             candidates: list[OCRResult] = []
             for variant in self.variants:
                 for backend in self.backends:
                     result = backend.recognize(variants[variant])
                     candidates.append(replace(result, variant=variant))
-            recognitions.append(PlateRecognition(detection, best_result(candidates)))
+            selected = best_result(candidates)
+            recognitions.append(
+                PlateRecognition(
+                    detection,
+                    selected
+                    or max(candidates, key=lambda candidate: candidate.confidence, default=None),
+                )
+            )
         return recognitions
 
     def recognize_video(

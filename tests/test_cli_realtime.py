@@ -24,6 +24,23 @@ def test_serve_parser_exposes_runtime_options() -> None:
     assert args.port == 9000
 
 
+
+def test_pipeline_parser_keeps_yolo_device_option() -> None:
+    args = build_parser().parse_args(
+        [
+            "infer-image",
+            "--image",
+            "input.jpg",
+            "--model",
+            "best.pt",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    assert args.device == "cpu"
+
+
 def test_pipeline_confidence_rejects_zero() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(
