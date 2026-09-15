@@ -10,18 +10,28 @@ interface SocketHook {
   disconnect: () => void;
   sendConfig: (width: number, height: number) => void;
   sendFrame: (frame: Blob, frameId: number, sourceTimeMs: number, width: number, height: number) => boolean;
-  canSendFrame: boolean;
+}
+
+function apiOrigin(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url;
 }
 
 function websocketUrl(baseUrl: string, token: string): string {
-  const url = new URL(baseUrl.replace(/^http/, "ws"));
-  url.pathname = `${url.pathname.replace(/\/$/, "")}/ws/stream`;
+  const url = apiOrigin(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/ws/stream";
   if (token.trim()) url.searchParams.set("token", token.trim());
   return url.toString();
 }
 
 export function usePlateSocket(): SocketHook {
   const socketRef = useRef<WebSocket | null>(null);
+  const healthAbortRef = useRef<AbortController | null>(null);
+  const generationRef = useRef(0);
   const inFlightRef = useRef(false);
   const [state, setState] = useState<ConnectionState>("disconnected");
   const [lastResult, setLastResult] = useState<FrameResult | null>(null);
@@ -29,6 +39,9 @@ export function usePlateSocket(): SocketHook {
   const [error, setError] = useState("");
 
   const disconnect = useCallback(() => {
+    generationRef.current += 1;
+    healthAbortRef.current?.abort();
+    healthAbortRef.current = null;
     socketRef.current?.close();
     socketRef.current = null;
     inFlightRef.current = false;
@@ -37,29 +50,39 @@ export function usePlateSocket(): SocketHook {
 
   const connect = useCallback((baseUrl: string, token = "") => {
     disconnect();
-    let healthUrl: string;
+    const generation = generationRef.current;
     try {
-      const parsed = new URL(baseUrl);
-      parsed.pathname = `${parsed.pathname.replace(/\/$/, "")}/api/health`;
-      parsed.protocol = parsed.protocol === "https:" ? "https:" : "http:";
-      healthUrl = parsed.toString();
+      const origin = apiOrigin(baseUrl);
+      origin.protocol = origin.protocol === "https:" ? "https:" : "http:";
+      const healthUrl = new URL("/api/health", origin).toString();
+      const controller = new AbortController();
+      healthAbortRef.current = controller;
       setState("connecting");
       setError("");
-      fetch(healthUrl)
+      fetch(healthUrl, { signal: controller.signal })
         .then(async (response) => {
           if (!response.ok) throw new Error(`Health check failed (${response.status})`);
+          if (generationRef.current !== generation) return;
           setHealth((await response.json()) as RuntimeHealth);
         })
         .catch((healthError: unknown) => {
+          if (healthError instanceof DOMException && healthError.name === "AbortError") return;
+          if (generationRef.current !== generation) return;
           setError(healthError instanceof Error ? healthError.message : "Health check failed");
         });
+
       const socket = new WebSocket(websocketUrl(baseUrl, token));
       socket.binaryType = "arraybuffer";
       socket.onopen = () => {
+        if (generationRef.current !== generation) {
+          socket.close();
+          return;
+        }
         socketRef.current = socket;
         setState("connected");
       };
       socket.onmessage = (event) => {
+        if (generationRef.current !== generation) return;
         try {
           const payload = JSON.parse(String(event.data)) as { type: string; message?: string };
           if (payload.type === "result") {
@@ -75,16 +98,19 @@ export function usePlateSocket(): SocketHook {
         }
       };
       socket.onerror = () => {
+        if (generationRef.current !== generation) return;
         inFlightRef.current = false;
         setState("error");
         setError("WebSocket connection failed");
       };
       socket.onclose = () => {
+        if (generationRef.current !== generation) return;
         inFlightRef.current = false;
-        socketRef.current = null;
+        if (socketRef.current === socket) socketRef.current = null;
         setState((current) => (current === "error" ? current : "disconnected"));
       };
     } catch (connectionError: unknown) {
+      if (generationRef.current !== generation) return;
       setState("error");
       setError(connectionError instanceof Error ? connectionError.message : "Invalid API URL");
     }
@@ -109,15 +135,5 @@ export function usePlateSocket(): SocketHook {
 
   useEffect(() => disconnect, [disconnect]);
 
-  return {
-    state,
-    lastResult,
-    health,
-    error,
-    connect,
-    disconnect,
-    sendConfig,
-    sendFrame,
-    canSendFrame: state === "connected" && !inFlightRef.current,
-  };
+  return { state, lastResult, health, error, connect, disconnect, sendConfig, sendFrame };
 }

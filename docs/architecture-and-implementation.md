@@ -30,7 +30,7 @@ local React <video>
   → React canvas overlay
 ```
 
-The API processes one in-flight frame per demo session and bounds its queue to prevent stale frames from accumulating. React keeps the original video local and never uploads the complete video file. See [realtime-demo-spec.md](realtime-demo-spec.md) for the protocol and Colab tunnel runbook.
+The API admits one in-flight frame per demo session; React backpressure prevents stale frames from accumulating. React keeps the original video local and never uploads the complete video file. See [realtime-demo-spec.md](realtime-demo-spec.md) for the protocol and Colab tunnel runbook.
 
 ## Module responsibilities
 

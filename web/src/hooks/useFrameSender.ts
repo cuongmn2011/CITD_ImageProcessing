@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 interface FrameSenderOptions {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -17,11 +17,13 @@ export function useFrameSender({
   sendConfig,
   sendFrame,
 }: FrameSenderOptions): void {
+  const frameIdRef = useRef(0);
+
   useEffect(() => {
     if (!enabled) return;
     let animationFrame = 0;
-    let frameId = 0;
-    let lastSentAt = 0;
+    let lastAttemptAt = 0;
+    let encoding = false;
     let configured = false;
     const interval = 1000 / Math.max(1, sampleFps);
 
@@ -33,7 +35,16 @@ export function useFrameSender({
           sendConfig(video.videoWidth, video.videoHeight);
           configured = true;
         }
-        if (!video.paused && !video.ended && now - lastSentAt >= interval) {
+        const dimensionsReady = video.videoWidth > 0 && video.videoHeight > 0;
+        if (
+          dimensionsReady &&
+          !video.paused &&
+          !video.ended &&
+          !encoding &&
+          now - lastAttemptAt >= interval
+        ) {
+          lastAttemptAt = now;
+          encoding = true;
           const width = Math.min(video.videoWidth, 960);
           const height = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * width));
           canvas.width = width;
@@ -41,11 +52,13 @@ export function useFrameSender({
           const context = canvas.getContext("2d");
           if (context) {
             context.drawImage(video, 0, 0, width, height);
+            const frameId = frameIdRef.current++;
             canvas.toBlob((blob) => {
-              if (blob && sendFrame(blob, frameId++, video.currentTime * 1000, width, height)) {
-                lastSentAt = now;
-              }
+              if (blob) sendFrame(blob, frameId, video.currentTime * 1000, width, height);
+              encoding = false;
             }, "image/jpeg", 0.75);
+          } else {
+            encoding = false;
           }
         }
       }

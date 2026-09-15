@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from lpr.detector import PlateDetection
 from lpr.ocr import OCRResult
@@ -77,3 +79,26 @@ def test_frame_result_payload_rejects_invalid_dimensions() -> None:
         assert "positive" in str(error)
     else:
         raise AssertionError("Expected invalid dimensions to fail")
+
+
+def test_websocket_rejects_disallowed_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LPR_ALLOWED_ORIGINS", "http://localhost:5173")
+    with TestClient(create_app(_recognizer())) as client:
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect(
+                "/ws/stream", headers={"origin": "https://evil.example"}
+            ):
+                pass
+
+    assert error.value.code == 1008
+
+
+def test_websocket_rejects_oversized_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LPR_MAX_FRAME_BYTES", "3")
+    with TestClient(create_app(_recognizer())) as client:
+        with client.websocket_connect("/ws/stream") as websocket:
+            websocket.send_json(
+                {"type": "frame_meta", "frame_id": 0, "width": 40, "height": 20}
+            )
+            websocket.send_bytes(b"1234")
+            assert "exceeds" in websocket.receive_json()["message"]
