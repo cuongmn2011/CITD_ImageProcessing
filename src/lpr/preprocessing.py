@@ -175,7 +175,15 @@ def preprocess_plate(image: np.ndarray, variant: PreprocessVariant = "otsu") -> 
     return _preprocess_resized(resize_for_ocr(image), variant)
 
 
-def generate_variants(image: np.ndarray) -> dict[PreprocessVariant, np.ndarray]:
-    """Generate all supported variants after one shared resize operation."""
+def generate_variants(
+    image: np.ndarray,
+    variants: tuple[PreprocessVariant, ...] = PREPROCESS_VARIANTS,
+) -> dict[PreprocessVariant, np.ndarray]:
+    """Generate only requested variants after one shared resize operation."""
+    if image is None or image.size == 0:
+        raise ValueError("Image must be non-empty")
+    invalid = set(variants) - set(PREPROCESS_VARIANTS)
+    if not variants or invalid:
+        raise ValueError(f"Unknown preprocessing variants: {sorted(invalid)}")
     resized = resize_for_ocr(image)
-    return {variant: _preprocess_resized(resized, variant) for variant in PREPROCESS_VARIANTS}
+    return {variant: _preprocess_resized(resized, variant) for variant in variants}

@@ -49,7 +49,7 @@ def detections_from_result(result: Any, image_shape: tuple[int, ...]) -> list[Pl
 
 
 class YoloPlateDetector:
-    """Lazy-loading Ultralytics YOLO detector for one plate class."""
+    """Ultralytics YOLO detector with stateless and persistent tracking modes."""
 
     def __init__(
         self,
@@ -57,33 +57,59 @@ class YoloPlateDetector:
         confidence: float = 0.4,
         iou: float = 0.7,
         device: str | int | None = None,
+        imgsz: int = 640,
+        tracker: str = "bytetrack.yaml",
     ) -> None:
         if not 0 < confidence <= 1:
             raise ValueError("confidence must be in (0, 1]")
         if not 0 < iou <= 1:
             raise ValueError("iou must be in (0, 1]")
+        if imgsz <= 0:
+            raise ValueError("imgsz must be positive")
         self.model_path = Path(model_path)
         self.confidence = confidence
         self.iou = iou
         self.device = device
+        self.imgsz = imgsz
+        self.tracker = tracker
         try:
             from ultralytics import YOLO
         except ImportError as error:
             raise RuntimeError("Install YOLO support with: uv sync --extra vision") from error
         self._model = YOLO(str(self.model_path))
 
-    def detect(self, image: np.ndarray) -> list[PlateDetection]:
-        """Run detection on one BGR/RGB image."""
-        if image is None or image.size == 0:
-            raise ValueError("Image must be non-empty")
+    def warmup(self, channels: int = 3) -> None:
+        """Run one inference so the first live frame avoids model startup cost."""
+        if channels not in {1, 3}:
+            raise ValueError("channels must be 1 or 3")
+        image = np.zeros((self.imgsz, self.imgsz, channels), dtype=np.uint8)
+        self.detect(image)
+
+    def _inference_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "conf": self.confidence,
             "iou": self.iou,
+            "imgsz": self.imgsz,
             "verbose": False,
         }
         if self.device is not None:
             kwargs["device"] = self.device
-        result = self._model.predict(source=image, **kwargs)[0]
+        return kwargs
+
+    def detect(self, image: np.ndarray) -> list[PlateDetection]:
+        """Run stateless detection on one BGR/RGB image."""
+        if image is None or image.size == 0:
+            raise ValueError("Image must be non-empty")
+        result = self._model.predict(source=image, **self._inference_kwargs())[0]
+        return detections_from_result(result, image.shape)
+
+    def track(self, image: np.ndarray) -> list[PlateDetection]:
+        """Track plates across frames using Ultralytics' persistent tracker."""
+        if image is None or image.size == 0:
+            raise ValueError("Image must be non-empty")
+        kwargs = self._inference_kwargs()
+        kwargs.update({"persist": True, "tracker": self.tracker})
+        result = self._model.track(source=image, **kwargs)[0]
         return detections_from_result(result, image.shape)
 
     @staticmethod
