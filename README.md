@@ -138,6 +138,53 @@ transcription per row, for example `crop_path,ground_truth`. Without those trans
 OCR by selecting PaddleOCR/EasyOCR, crop quality, preprocessing, and temporal voting instead of
 claiming that detector retraining fixed recognition.
 
+## OCR training
+
+The OCR backends above are pretrained and inference-only. To fine-tune PaddleOCR's recognition
+model on Vietnamese plate characters instead of relying on a generic pretrained model, install
+the training extra:
+
+```bash
+uv sync --extra ocr-train
+```
+
+Build a PaddleX recognition dataset by merging two sources: a character-annotated Roboflow
+export (per-character boxes converted into plate-text ground truth by line-clustering and
+left-to-right sorting) and a filename-labeled GitHub supplement (ground truth read straight from
+each crop's filename, requires `git` on `PATH`). Requires network access; `git clone` needs the
+system `git` binary:
+
+```bash
+export ROBOFLOW_API_KEY="<your-key>"
+uv run --extra dataset --extra ocr-train python scripts/prepare-ocr-dataset.py
+```
+
+Use `--no-github-supplement` to build from the Roboflow export alone. The GitHub supplement has
+no LICENSE file — see [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md) for the
+academic/non-commercial-only caveat before using it beyond this project.
+
+Fine-tune with PaddleX:
+
+```bash
+uv run --extra ocr-train python scripts/train-ocr.py \
+  --dataset-dir data/processed/ocr-rec-dataset \
+  --config PP-OCRv5_mobile_rec
+```
+
+Use the fine-tuned model at inference time:
+
+```bash
+uv run lpr infer-image \
+  --image path/to/car.jpg \
+  --model models/best.pt \
+  --ocr paddleocr \
+  --rec-model-dir outputs/ocr-rec-training/best_model
+```
+
+The dataset source, license, and the character-line reconstruction method are documented in
+[docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md). No OCR accuracy claim is made
+until a real fine-tuning run and held-out evaluation exist.
+
 ## Inference
 
 Image inference:
@@ -215,6 +262,7 @@ uv lock --check
 
 - [Documentation index](docs/README.md)
 - [Research and dataset selection](docs/research-dataset-selection.md)
+- [OCR character dataset selection](docs/ocr-dataset-selection.md)
 - [Architecture and implementation](docs/architecture-and-implementation.md)
 - [Dataset runtime integration](docs/dataset-runtime-integration.md)
 - [Project journal and final-report guide](docs/project-journal.md)

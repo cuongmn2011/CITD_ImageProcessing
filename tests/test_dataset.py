@@ -1,12 +1,15 @@
 import json
+import shutil
 import sys
 from types import SimpleNamespace
 
 import pytest
 
+import lpr.dataset as dataset_module
 from lpr.dataset import (
     DatasetPreparationError,
     RoboflowDatasetSpec,
+    ensure_git_dataset,
     ensure_roboflow_dataset,
     validate_yolo_export,
 )
@@ -128,3 +131,64 @@ def test_ensure_downloads_and_writes_manifest(tmp_path, monkeypatch) -> None:
         json.loads(prepared.manifest.read_text(encoding="utf-8"))["dataset"]
         == "workspace/project/1"
     )
+
+
+def test_ensure_git_dataset_clones_and_writes_manifest(tmp_path, monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_clone(repo_url, ref, subdir, location):
+        calls.append((repo_url, ref, subdir))
+        location.mkdir(parents=True)
+        (location / "29A87180_0_0.jpg").write_bytes(b"image")
+        return "deadbeef"
+
+    monkeypatch.setattr(dataset_module, "_clone_with_git", fake_clone)
+    prepared = ensure_git_dataset(
+        "https://example.com/repo.git",
+        tmp_path / "supplement",
+        ref="main",
+        subdir="train",
+    )
+
+    assert prepared.commit == "deadbeef"
+    assert (prepared.location / "29A87180_0_0.jpg").is_file()
+    manifest = json.loads(prepared.manifest.read_text(encoding="utf-8"))
+    assert manifest == {
+        "repo": "https://example.com/repo.git",
+        "ref": "main",
+        "subdir": "train",
+        "commit": "deadbeef",
+    }
+    assert len(calls) == 1
+
+    # A second call with the same repo/ref/subdir reuses the cache without cloning again.
+    cached = ensure_git_dataset(
+        "https://example.com/repo.git",
+        tmp_path / "supplement",
+        ref="main",
+        subdir="train",
+    )
+    assert cached.commit == "deadbeef"
+    assert len(calls) == 1
+
+
+def test_ensure_git_dataset_force_reclones(tmp_path, monkeypatch) -> None:
+    commits = iter(["first", "second"])
+
+    def fake_clone(repo_url, ref, subdir, location):
+        if location.exists():
+            shutil.rmtree(location)
+        location.mkdir(parents=True)
+        (location / "sample.jpg").write_bytes(b"image")
+        return next(commits)
+
+    monkeypatch.setattr(dataset_module, "_clone_with_git", fake_clone)
+    monkeypatch.chdir(tmp_path)
+    destination = tmp_path / "data" / "processed" / "supplement"
+    first = ensure_git_dataset("https://example.com/repo.git", destination, subdir="train")
+    assert first.commit == "first"
+
+    second = ensure_git_dataset(
+        "https://example.com/repo.git", destination, subdir="train", force=True
+    )
+    assert second.commit == "second"

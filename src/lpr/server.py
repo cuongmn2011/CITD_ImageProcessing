@@ -34,6 +34,7 @@ class RuntimeConfig:
     imgsz: int
     confidence: float
     variants: tuple[str, ...]
+    rec_model_dir: str | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -74,6 +75,7 @@ def load_runtime_config() -> RuntimeConfig:
         imgsz=_env_int("LPR_IMGSZ", 640),
         confidence=confidence,
         variants=raw_variants,
+        rec_model_dir=os.getenv("LPR_REC_MODEL_DIR") or None,
     )
 
 
@@ -94,13 +96,13 @@ def resolve_model_path(path: str | Path) -> Path:
     raise FileNotFoundError(f"Model file does not exist: {candidate}")
 
 
-def _create_backend(name: str) -> Any:
+def _create_backend(name: str, rec_model_dir: str | None = None) -> Any:
     if name == "tesseract":
         return TesseractBackend()
     if name == "easyocr":
         return EasyOCRBackend(gpu=True)
     if name == "paddleocr":
-        return PaddleOCRBackend()
+        return PaddleOCRBackend(rec_model_dir=rec_model_dir)
     raise ValueError(f"Unsupported OCR backend: {name}")
 
 
@@ -115,7 +117,7 @@ def _build_recognizer(config: RuntimeConfig) -> RealtimePlateRecognizer:
     detector.warmup()
     return RealtimePlateRecognizer(
         detector,
-        [_create_backend(config.ocr_backend)],
+        [_create_backend(config.ocr_backend, config.rec_model_dir)],
         variants=config.variants,
     )
 

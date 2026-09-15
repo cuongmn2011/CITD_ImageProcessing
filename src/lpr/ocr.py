@@ -135,17 +135,20 @@ class PaddleOCRBackend:
 
     name = "paddleocr"
 
-    def __init__(self, language: str = "en") -> None:
+    def __init__(self, language: str = "en", rec_model_dir: str | None = None) -> None:
         try:
             from paddleocr import PaddleOCR
         except ImportError as error:
             raise RuntimeError("Install PaddleOCR separately for this optional backend") from error
-        self._ocr = PaddleOCR(
-            lang=language,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-        )
+        kwargs: dict[str, Any] = {
+            "lang": language,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+        }
+        if rec_model_dir is not None:
+            kwargs["text_recognition_model_dir"] = rec_model_dir
+        self._ocr = PaddleOCR(**kwargs)
 
     def recognize(self, image: np.ndarray) -> OCRResult:
         _validate_image(image)
