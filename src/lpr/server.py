@@ -194,7 +194,6 @@ def create_app(recognizer: RealtimePlateRecognizer | None = None) -> FastAPI:
             await websocket.close(code=1008, reason="Invalid demo token")
             return
         await websocket.accept()
-        width = height = 0
         try:
             while True:
                 message = await websocket.receive()
@@ -205,15 +204,16 @@ def create_app(recognizer: RealtimePlateRecognizer | None = None) -> FastAPI:
                     payload = json.loads(text)
                     message_type = payload.get("type")
                     if message_type == "config":
-                        width = int(payload.get("source_width", 0))
-                        height = int(payload.get("source_height", 0))
-                        if width <= 0 or height <= 0:
+                        config_width = int(payload.get("source_width", 0))
+                        config_height = int(payload.get("source_height", 0))
+                        if config_width <= 0 or config_height <= 0:
                             raise ValueError("config requires positive source dimensions")
                         await websocket.send_json({"type": "ready"})
                     elif message_type == "frame_meta":
-                        if width <= 0 or height <= 0:
-                            width = int(payload.get("width", 0))
-                            height = int(payload.get("height", 0))
+                        frame_width = int(payload.get("width", 0))
+                        frame_height = int(payload.get("height", 0))
+                        if frame_width <= 0 or frame_height <= 0:
+                            raise ValueError("frame_meta requires positive dimensions")
                         frame = await websocket.receive_bytes()
                         image = _decode_jpeg(frame)
                         result = await asyncio.to_thread(
@@ -224,7 +224,9 @@ def create_app(recognizer: RealtimePlateRecognizer | None = None) -> FastAPI:
                             if payload.get("source_time_ms") is not None
                             else None,
                         )
-                        await websocket.send_json(frame_result_payload(result, width, height))
+                        await websocket.send_json(
+                            frame_result_payload(result, frame_width, frame_height)
+                        )
                     else:
                         await websocket.send_json(
                             {"type": "error", "message": "Unknown message type"}
