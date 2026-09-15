@@ -23,6 +23,9 @@ outputs/
 *.avi
 *.mov
 
+web/node_modules/
+web/dist/
+
 # Local environment and secrets
 .env
 .env.*

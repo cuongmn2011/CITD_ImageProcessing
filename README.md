@@ -103,6 +103,41 @@ uv run --extra vision python scripts/train-yolo.py \
 
 No dataset, model weights, video, or generated training run is committed to Git.
 
+## OCR training versus detector training
+
+The artifact in `outputs/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
+It contains bounding boxes, not plate-text transcripts, so retraining YOLO from this artifact
+cannot teach OCR to read characters. The current validation metrics (`mAP50=0.99495`,
+`mAP50-95=0.72907`) measure detection, not OCR accuracy.
+
+First diagnose OCR on real crops with a backend that is installed:
+
+```bash
+uv run lpr infer-image \
+  --image path/to/car.jpg \
+  --model outputs/.lpr-model/best.pt \
+  --ocr easyocr \
+  --variants raw,gray,otsu,adaptive,clahe
+```
+
+To fine-tune the detector for tighter plate crops, use the existing `best.pt` as initialization
+after the dataset cache is available:
+
+```bash
+export ROBOFLOW_API_KEY="<your-key>"
+uv run --extra vision --extra dataset python scripts/train-yolo.py \
+  --model outputs/.lpr-model/best.pt \
+  --epochs 100 \
+  --imgsz 960 \
+  --batch -1 \
+  --workers 2
+```
+
+Actual OCR training requires a separate labeled set containing one plate crop and its exact
+transcription per row, for example `crop_path,ground_truth`. Without those transcripts, improve
+OCR by selecting PaddleOCR/EasyOCR, crop quality, preprocessing, and temporal voting instead of
+claiming that detector retraining fixed recognition.
+
 ## Inference
 
 Image inference:
@@ -126,6 +161,34 @@ uv run lpr infer-video \
 ```
 
 Inference does not download the training dataset. Dataset download belongs to the training/data-preparation flow only.
+
+## Realtime React demo
+
+The realtime demo keeps a local video in the browser and sends sampled JPEG frames to a GPU API. The API returns detection/OCR JSON over WebSocket; React draws the overlay locally. It does not wait for a complete annotated video.
+
+Run the frontend locally:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Start the GPU API on Colab:
+
+```bash
+uv run --extra vision --extra paddle --extra web lpr serve \
+  --model /content/drive/MyDrive/lpr/best.pt \
+  --ocr-backend paddleocr \
+  --device 0 \
+  --imgsz 640 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+Expose port 8000 with Cloudflare Quick Tunnel, then enter the generated HTTPS URL in the React UI. The WebSocket endpoint is `/ws/stream`; configure `LPR_ALLOWED_ORIGINS` for the Vercel origin and keep `LPR_DEMO_TOKEN` outside Git.
+
+The complete protocol, runbook, supported claim, evaluation protocol, and feature branch order are in [docs/realtime-demo-spec.md](docs/realtime-demo-spec.md).
 
 ## OCR evaluation
 

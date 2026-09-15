@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass, replace
+from collections import Counter, deque
+from dataclasses import dataclass, field, replace
 from time import perf_counter
-from typing import Iterable, Protocol
+from typing import Iterable, Literal, Protocol
 
 import numpy as np
 
@@ -31,7 +31,7 @@ class StreamPlate:
     recognition: PlateRecognition
     track_id: int | None
     stable: bool
-    status: str
+    status: Literal["stable", "candidate", "detected"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +50,7 @@ class _TrackState:
     last_ocr_frame: int = -1
     stable_text: str = ""
     stable_result: OCRResult | None = None
-    votes: Counter[str] | None = None
-    observations: int = 0
-
-    def __post_init__(self) -> None:
-        self.votes = Counter()
+    vote_history: deque[str] = field(default_factory=deque)
 
 
 class RealtimePlateRecognizer:
@@ -67,6 +63,7 @@ class RealtimePlateRecognizer:
         variants: Iterable[PreprocessVariant] = ("otsu",),
         crop_padding: float = 0.08,
         ocr_refresh_frames: int = 12,
+        ocr_retry_frames: int = 3,
         stable_votes: int = 3,
         track_ttl_frames: int = 30,
     ) -> None:
@@ -75,6 +72,7 @@ class RealtimePlateRecognizer:
         self.variants = tuple(variants)
         self.crop_padding = crop_padding
         self.ocr_refresh_frames = ocr_refresh_frames
+        self.ocr_retry_frames = min(ocr_retry_frames, ocr_refresh_frames)
         self.stable_votes = stable_votes
         self.track_ttl_frames = track_ttl_frames
         self._tracks: dict[int, _TrackState] = {}
@@ -87,9 +85,13 @@ class RealtimePlateRecognizer:
             raise ValueError(f"Unknown preprocessing variants: {sorted(invalid)}")
         if not 0 <= crop_padding <= 1:
             raise ValueError("crop_padding must be between 0 and 1")
-        if ocr_refresh_frames < 1 or stable_votes < 1 or track_ttl_frames < 1:
+        if (
+            ocr_refresh_frames < 1
+            or ocr_retry_frames < 1
+            or stable_votes < 1
+            or track_ttl_frames < 1
+        ):
             raise ValueError("Realtime timing values must be positive")
-
     def reset(self) -> None:
         """Forget tracker-side OCR state at the beginning of a new session."""
         self._tracks.clear()
@@ -136,31 +138,30 @@ class RealtimePlateRecognizer:
         state: _TrackState,
         frame_id: int,
     ) -> PlateRecognition:
-        cached = state.stable_result
+        has_stable_text = bool(state.stable_text)
+        refresh_after = self.ocr_refresh_frames if has_stable_text else self.ocr_retry_frames
         should_refresh = (
-            cached is None
-            or state.last_ocr_frame < 0
-            or frame_id - state.last_ocr_frame >= self.ocr_refresh_frames
+            state.last_ocr_frame < 0
+            or frame_id - state.last_ocr_frame >= refresh_after
         )
         if should_refresh:
             crop = self.detector.crop(image, detection, padding=self.crop_padding)
             result = self._recognize_crop(crop)
             state.last_ocr_frame = frame_id
             if result is not None:
-                state.observations += 1
                 if result.valid_plate_format:
-                    assert state.votes is not None
-                    state.votes[result.text] += 1
-                    winner, votes = state.votes.most_common(1)[0]
+                    state.vote_history.append(result.text)
+                    while len(state.vote_history) > self.stable_votes * 2:
+                        state.vote_history.popleft()
+                    winner, votes = Counter(state.vote_history).most_common(1)[0]
                     if votes >= self.stable_votes:
                         state.stable_text = winner
                         state.stable_result = result
-                elif state.stable_result is None:
+                    elif not has_stable_text:
+                        state.stable_result = result
+                elif not has_stable_text:
                     state.stable_result = result
-        if state.stable_result is not None:
-            result = state.stable_result
-        else:
-            result = OCRResult("", 0.0, "none")
+        result = state.stable_result
         return PlateRecognition(detection, result)
 
     def _recognize_crop(self, crop: np.ndarray) -> OCRResult | None:

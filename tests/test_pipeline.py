@@ -35,6 +35,23 @@ def test_pipeline_detects_and_recognizes_each_plate() -> None:
     assert results[0].ocr.variant == "gray"
 
 
+def test_pipeline_keeps_best_invalid_ocr_for_diagnostics() -> None:
+    class InvalidBackend:
+        name = "fake"
+
+        def recognize(self, image: np.ndarray) -> OCRResult:
+            return OCRResult("ABC", 0.9, self.name, raw_text="A B C")
+
+    image = np.zeros((20, 40, 3), dtype=np.uint8)
+    results = LicensePlateRecognizer(
+        FakeDetector(), [InvalidBackend()], variants=("gray",)
+    ).recognize_image(image)
+
+    assert results[0].ocr is not None
+    assert results[0].ocr.text == "ABC"
+    assert results[0].ocr.raw_text == "A B C"
+
+
 def test_pipeline_rejects_empty_backend_list() -> None:
     try:
         LicensePlateRecognizer(FakeDetector(), [])

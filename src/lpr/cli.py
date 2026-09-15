@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import os
 from pathlib import Path
 from typing import Sequence, cast
 
@@ -57,6 +58,13 @@ def _unit_interval(value: str) -> float:
     return parsed
 
 
+def _confidence(value: str) -> float:
+    parsed = _unit_interval(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("confidence must be greater than 0")
+    return parsed
+
+
 def _recognizer(args: argparse.Namespace) -> LicensePlateRecognizer:
     detector = YoloPlateDetector(args.model, confidence=args.confidence, device=args.device)
     backends = [_backend(name, args.gpu) for name in args.ocr]
@@ -76,9 +84,9 @@ def _add_pipeline_arguments(parser: argparse.ArgumentParser) -> None:
         default=("otsu", "clahe"),
         help="Comma-separated preprocessing variants",
     )
-    parser.add_argument("--confidence", type=float, default=0.4)
     parser.add_argument("--padding", type=_unit_interval, default=0.08)
     parser.add_argument("--device", default=None, help="YOLO device, for example 0 or cpu")
+    parser.add_argument("--confidence", type=_confidence, default=0.4)
     parser.add_argument("--gpu", action="store_true", help="Use GPU for EasyOCR")
 
 
@@ -106,6 +114,18 @@ def build_parser() -> argparse.ArgumentParser:
         "evaluate-ocr", help="Evaluate a CSV with ground_truth,prediction columns"
     )
     evaluate.add_argument("--csv", required=True, type=Path)
+
+    serve = subparsers.add_parser("serve", help="Run the realtime FastAPI inference server")
+    serve.add_argument("--model", required=True, help="Path to trained YOLO weights or archive")
+    serve.add_argument(
+        "--ocr-backend",
+        default="paddleocr",
+        choices=["tesseract", "easyocr", "paddleocr"],
+    )
+    serve.add_argument("--device", default=None)
+    serve.add_argument("--imgsz", type=_positive_int, default=640)
+    serve.add_argument("--host", default="0.0.0.0")
+    serve.add_argument("--port", type=_positive_int, default=8000)
     return parser
 
 
@@ -114,6 +134,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "evaluate-ocr":
         with args.csv.open(newline="", encoding="utf-8") as file:
             print(json.dumps(evaluate_ocr_pairs(csv.DictReader(file)), indent=2))
+        return 0
+    if args.command == "serve":
+        try:
+            import uvicorn
+        except ImportError as error:
+            raise RuntimeError("Install web support with: uv sync --extra web") from error
+        os.environ["LPR_MODEL_PATH"] = str(args.model)
+        os.environ["LPR_OCR_BACKEND"] = args.ocr_backend
+        os.environ["LPR_IMGSZ"] = str(args.imgsz)
+        if args.device is not None:
+            os.environ["LPR_DEVICE"] = str(args.device)
+        from .server import create_app
+
+        uvicorn.run(create_app(), host=args.host, port=args.port)
         return 0
 
     pipeline = _recognizer(args)

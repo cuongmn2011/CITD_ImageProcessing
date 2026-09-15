@@ -43,6 +43,9 @@ This directory contains the project evidence and operating documentation. Source
    - Project architecture, training flow, inference flow, and sequence diagrams.
    - Methodology, equations, observed training results, limitations, and future work.
 
+
+9. [Realtime React demo specification](realtime-demo-spec.md)
+   - WebSocket protocol, Colab GPU tunnel, React UI contract, and acceptance metrics.
 ## Evidence policy
 
 - Claims about behavior must point to source files, tests, or command output.
