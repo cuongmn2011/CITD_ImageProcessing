@@ -16,6 +16,22 @@ flowchart TD
     I --> B
 ```
 
+## Realtime web boundary
+
+The batch video path remains available for offline annotated MP4 output. The realtime path uses a separate frame contract:
+
+```text
+local React <video>
+  → canvas JPEG sampling
+  → FastAPI WebSocket on GPU
+  → YOLO tracking
+  → OCR cache and temporal voting
+  → JSON bbox/text result
+  → React canvas overlay
+```
+
+The API processes one in-flight frame per demo session and bounds its queue to prevent stale frames from accumulating. React keeps the original video local and never uploads the complete video file. See [realtime-demo-spec.md](realtime-demo-spec.md) for the protocol and Colab tunnel runbook.
+
 ## Module responsibilities
 
 | Module | Responsibility |

@@ -127,6 +127,34 @@ uv run lpr infer-video \
 
 Inference does not download the training dataset. Dataset download belongs to the training/data-preparation flow only.
 
+## Realtime React demo
+
+The realtime demo keeps a local video in the browser and sends sampled JPEG frames to a GPU API. The API returns detection/OCR JSON over WebSocket; React draws the overlay locally. It does not wait for a complete annotated video.
+
+Run the frontend locally:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Start the GPU API on Colab:
+
+```bash
+uv run --extra vision --extra paddle --extra web lpr serve \
+  --model /content/drive/MyDrive/lpr/best.pt \
+  --ocr-backend paddleocr \
+  --device 0 \
+  --imgsz 640 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+Expose port 8000 with Cloudflare Quick Tunnel, then enter the generated HTTPS URL in the React UI. The WebSocket endpoint is `/ws/stream`; configure `LPR_ALLOWED_ORIGINS` for the Vercel origin and keep `LPR_DEMO_TOKEN` outside Git.
+
+The complete protocol, runbook, supported claim, evaluation protocol, and feature branch order are in [docs/realtime-demo-spec.md](docs/realtime-demo-spec.md).
+
 ## OCR evaluation
 
 The evaluator expects a CSV with `ground_truth` and `prediction` columns:
