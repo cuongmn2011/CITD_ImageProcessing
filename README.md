@@ -103,6 +103,41 @@ uv run --extra vision python scripts/train-yolo.py \
 
 No dataset, model weights, video, or generated training run is committed to Git.
 
+## OCR training versus detector training
+
+The artifact in `outputs/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
+It contains bounding boxes, not plate-text transcripts, so retraining YOLO from this artifact
+cannot teach OCR to read characters. The current validation metrics (`mAP50=0.99495`,
+`mAP50-95=0.72907`) measure detection, not OCR accuracy.
+
+First diagnose OCR on real crops with a backend that is installed:
+
+```bash
+uv run lpr infer-image \
+  --image path/to/car.jpg \
+  --model outputs/.lpr-model/best.pt \
+  --ocr easyocr \
+  --variants raw,gray,otsu,adaptive,clahe
+```
+
+To fine-tune the detector for tighter plate crops, use the existing `best.pt` as initialization
+after the dataset cache is available:
+
+```bash
+export ROBOFLOW_API_KEY="<your-key>"
+uv run --extra vision --extra dataset python scripts/train-yolo.py \
+  --model outputs/.lpr-model/best.pt \
+  --epochs 100 \
+  --imgsz 960 \
+  --batch -1 \
+  --workers 2
+```
+
+Actual OCR training requires a separate labeled set containing one plate crop and its exact
+transcription per row, for example `crop_path,ground_truth`. Without those transcripts, improve
+OCR by selecting PaddleOCR/EasyOCR, crop quality, preprocessing, and temporal voting instead of
+claiming that detector retraining fixed recognition.
+
 ## Inference
 
 Image inference:
