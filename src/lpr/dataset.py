@@ -18,18 +18,22 @@ DEFAULT_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "license-plates"
 DEFAULT_DATASET_FORMAT = "yolov8"
 MANIFEST_FILENAME = ".dataset-manifest.json"
 
-# Character-level plate annotations used to fine-tune OCR recognition instead of the detector.
-# See docs/ocr-dataset-selection.md for the license/provenance record.
-DEFAULT_OCR_DATASET_SPEC = "dataset-format-conversion-iidaz/vietnam-license-plate-recognition/1"
-DEFAULT_OCR_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "plate-characters"
-
-# Volume-boosting OCR supplement with filename-encoded ground truth. No LICENSE file exists for
-# this source; see docs/ocr-dataset-selection.md for the academic/non-commercial-only caveat.
-DEFAULT_OCR_SUPPLEMENT_REPO = "https://github.com/lephamcong/PBL4_Deep-Learning"
-DEFAULT_OCR_SUPPLEMENT_REF = "main"
-DEFAULT_OCR_SUPPLEMENT_SUBDIR = "Dataset/BiensoxeVietNam/train"
-DEFAULT_OCR_SUPPLEMENT_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "ocr-filename-labeled"
+# OCR recognition fine-tuning dataset with filename-encoded ground truth. No LICENSE file exists
+# for this source; see docs/ocr-dataset-selection.md for the academic/non-commercial-only caveat.
+DEFAULT_OCR_DATASET_REPO = "https://github.com/lephamcong/PBL4_Deep-Learning"
+# Pinned to the commit fetched and recorded on 2026-09-16 (12,320 samples), not the moving
+# "main" branch, so the dataset stays reproducible. See docs/ocr-dataset-selection.md.
+DEFAULT_OCR_DATASET_REF = "054cc054cdc2b24305f3675a9c14832459c8f9db"
+DEFAULT_OCR_DATASET_SUBDIR = "Dataset/BiensoxeVietNam/train"
+DEFAULT_OCR_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "ocr-filename-labeled"
 GIT_MANIFEST_FILENAME = ".git-dataset-manifest.json"
+
+# Second OCR source (its valid/ split: 136 extra plate texts). No LICENSE file either; see
+# docs/ocr-dataset-selection.md.
+EXTRA_OCR_DATASET_REPO = "https://github.com/NguyenHuuThDat/LPRNet"
+EXTRA_OCR_DATASET_REF = "7e7c3982c6ce1e9dea51b3eea85f632e09d7b91c"
+EXTRA_OCR_DATASET_SUBDIR = "Dataset/BiensoxeVietNam/valid"
+EXTRA_OCR_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "ocr-filename-labeled-extra"
 
 
 class DatasetPreparationError(RuntimeError):
@@ -358,22 +362,17 @@ def _clone_with_git(repo_url: str, ref: str, subdir: str, location: Path) -> str
         except subprocess.CalledProcessError as error:
             raise DatasetPreparationError(f"git {args[0]} failed: {error.stderr}") from error
 
+    # `git clone --branch` only accepts a real branch/tag name, not an arbitrary pinned commit
+    # SHA. init+fetch+checkout works for both, and GitHub allows fetching any reachable commit.
     with tempfile.TemporaryDirectory(prefix="git-dataset-") as temporary:
         clone_root = Path(temporary) / "repo"
-        _run(
-            "clone",
-            "--depth",
-            "1",
-            "--filter=blob:none",
-            "--sparse",
-            "--branch",
-            ref,
-            repo_url,
-            str(clone_root),
-            cwd=Path(temporary),
-        )
+        clone_root.mkdir()
+        _run("init", cwd=clone_root)
+        _run("remote", "add", "origin", repo_url, cwd=clone_root)
         _run("sparse-checkout", "set", subdir, cwd=clone_root)
-        commit = _run("rev-parse", "HEAD", cwd=clone_root).stdout.strip()
+        _run("fetch", "--depth", "1", "--filter=blob:none", "origin", ref, cwd=clone_root)
+        _run("checkout", "FETCH_HEAD", cwd=clone_root)
+        commit = _run("rev-parse", "FETCH_HEAD", cwd=clone_root).stdout.strip()
         source = clone_root / subdir
         if not source.is_dir():
             raise DatasetPreparationError(f"{subdir} does not exist in {repo_url}@{ref}")
@@ -385,11 +384,11 @@ def _clone_with_git(repo_url: str, ref: str, subdir: str, location: Path) -> str
 
 
 def ensure_git_dataset(
-    repo_url: str = DEFAULT_OCR_SUPPLEMENT_REPO,
-    location: str | Path = DEFAULT_OCR_SUPPLEMENT_LOCATION,
+    repo_url: str = DEFAULT_OCR_DATASET_REPO,
+    location: str | Path = DEFAULT_OCR_DATASET_LOCATION,
     *,
-    ref: str = DEFAULT_OCR_SUPPLEMENT_REF,
-    subdir: str = DEFAULT_OCR_SUPPLEMENT_SUBDIR,
+    ref: str = DEFAULT_OCR_DATASET_REF,
+    subdir: str = DEFAULT_OCR_DATASET_SUBDIR,
     force: bool = False,
 ) -> PreparedGitDataset:
     """Return a cached git-sourced dataset subdir, cloning only when missing or forced."""
@@ -398,12 +397,15 @@ def ensure_git_dataset(
 
     manifest_path = destination / GIT_MANIFEST_FILENAME
     manifest = _read_manifest(manifest_path)
+    cached_commit = manifest.get("commit") if manifest is not None else None
+    # `ref` matches either the string originally used to fetch, or (since `ref` can itself be a
+    # pinned commit SHA) the resolved commit already recorded — both mean "same content".
     cache_matches = (
         manifest is not None
         and manifest.get("repo") == repo_url
-        and manifest.get("ref") == ref
         and manifest.get("subdir") == subdir
-        and isinstance(manifest.get("commit"), str)
+        and isinstance(cached_commit, str)
+        and (manifest.get("ref") == ref or cached_commit == ref)
     )
     if cache_matches and not force:
         return PreparedGitDataset(destination, manifest["commit"], manifest_path)
