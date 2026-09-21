@@ -148,40 +148,50 @@ the training extra:
 uv sync --extra ocr-train
 ```
 
-Build a PaddleX recognition dataset by merging two sources: a character-annotated Roboflow
-export (per-character boxes converted into plate-text ground truth by line-clustering and
-left-to-right sorting) and a filename-labeled GitHub supplement (ground truth read straight from
-each crop's filename, requires `git` on `PATH`). Requires network access; `git clone` needs the
-system `git` binary:
+Build a PaddleX recognition dataset from two filename-labeled GitHub sources (ground truth is
+read straight from each crop's filename, for example `29A87180_1212_0.jpg`; `--no-extra-source`
+uses only the first). This needs the system `git` binary on `PATH` and network access, but no
+Roboflow API key:
 
 ```bash
-export ROBOFLOW_API_KEY="<your-key>"
-uv run --extra dataset --extra ocr-train python scripts/prepare-ocr-dataset.py
+uv run --extra ocr-train python scripts/prepare-ocr-dataset.py
 ```
 
-Use `--no-github-supplement` to build from the Roboflow export alone. The GitHub supplement has
-no LICENSE file — see [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md) for the
-academic/non-commercial-only caveat before using it beyond this project.
+The source repo has no LICENSE file — see [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md)
+for the academic/non-commercial-only caveat before using it beyond this project.
 
-Fine-tune with PaddleX:
+Fine-tune locally on CPU (the `paddlex` pip package is inference-only; training uses the
+`PaddleOCR` training plugin, installed automatically on first run via
+`python -m paddlex --install PaddleOCR`):
 
 ```bash
+uv pip install paddlepaddle
 uv run --extra ocr-train python scripts/train-ocr.py \
   --dataset-dir data/processed/ocr-rec-dataset \
   --config PP-OCRv5_mobile_rec
 ```
 
-Use the fine-tuned model at inference time:
+CPU training on the full ~12k-sample dataset is slow; consider a machine with an NVIDIA GPU
+(`--use-gpu`, plus a matching `paddlepaddle-gpu` install) for faster iteration.
+
+`--rec-model-dir` needs the exported **inference** format, not the training checkpoint. Export
+`best_accuracy` with the plugin's `tools/export_model.py` (`Global.pretrained_model=<checkpoint
+prefix>`, `Global.save_inference_dir=<dir>`), which writes `inference.json`/`.pdiparams`/`.yml`.
+The Colab notebook does this for you. Then use the model at inference time:
 
 ```bash
 uv run lpr infer-image \
   --image path/to/car.jpg \
   --model models/best.pt \
   --ocr paddleocr \
-  --rec-model-dir outputs/ocr-rec-training/best_model
+  --rec-model-dir path/to/inference
 ```
 
-The dataset source, license, and the character-line reconstruction method are documented in
+To try the OCR model alone on a cropped plate image, run
+`uv run python scripts/ocr-demo.py --model-dir path/to/inference` and open
+http://127.0.0.1:8080 (needs `uv sync --extra web --extra paddle`).
+
+The dataset source and license caveat are documented in
 [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md). No OCR accuracy claim is made
 until a real fine-tuning run and held-out evaluation exist.
 
@@ -267,6 +277,7 @@ uv lock --check
 - [Dataset runtime integration](docs/dataset-runtime-integration.md)
 - [Project journal and final-report guide](docs/project-journal.md)
 - [Colab/Kaggle training notebook](notebooks/train_pipeline.ipynb)
+- [Colab OCR fine-tuning notebook](notebooks/ocr_train_pipeline.ipynb)
 
 ## Current limitations
 

@@ -80,6 +80,22 @@ def test_paddleocr_backend_forwards_fine_tuned_rec_model_dir(monkeypatch) -> Non
     assert calls["text_recognition_model_dir"] == "outputs/ocr-rec-training/best_model"
 
 
+def test_paddleocr_backend_forwards_model_name_from_inference_yml(monkeypatch, tmp_path) -> None:
+    (tmp_path / "inference.yml").write_text(
+        "Global:\n  model_name: PP-OCRv5_mobile_rec\n", encoding="utf-8"
+    )
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend(rec_model_dir=str(tmp_path))
+
+    assert calls["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
+
+
 def test_paddleocr_backend_omits_rec_model_dir_by_default(monkeypatch) -> None:
     calls: dict[str, object] = {}
 

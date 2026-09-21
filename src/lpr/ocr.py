@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -145,9 +146,16 @@ class PaddleOCRBackend:
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
+            # Paddle 3.x oneDNN crashes the CPU text detector on this backend.
+            "enable_mkldnn": False,
         }
         if rec_model_dir is not None:
             kwargs["text_recognition_model_dir"] = rec_model_dir
+            # PaddleX asserts the requested model name equals the exported model's own name,
+            # and the language default (e.g. lang="en") differs from the fine-tuned one.
+            model_name = _exported_model_name(rec_model_dir)
+            if model_name is not None:
+                kwargs["text_recognition_model_name"] = model_name
         self._ocr = PaddleOCR(**kwargs)
 
     def recognize(self, image: np.ndarray) -> OCRResult:
@@ -160,6 +168,19 @@ class PaddleOCRBackend:
         return OCRResult(
             normalize_text(raw_text), float(np.mean(scores)) if scores else 0.0, self.name, raw_text
         )
+
+
+def _exported_model_name(model_dir: str) -> str | None:
+    """Read Global.model_name from an exported PaddleOCR model's inference.yml, if present."""
+    import yaml
+
+    config_path = Path(model_dir) / "inference.yml"
+    if not config_path.is_file():
+        return None
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    global_section = payload.get("Global") if isinstance(payload, dict) else None
+    name = global_section.get("model_name") if isinstance(global_section, dict) else None
+    return name if isinstance(name, str) and name else None
 
 
 def _paddle_text_and_scores(prediction: Any) -> tuple[list[str], list[float]]:
