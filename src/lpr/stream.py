@@ -51,6 +51,7 @@ class _TrackState:
     stable_text: str = ""
     stable_result: OCRResult | None = None
     vote_history: deque[str] = field(default_factory=deque)
+    latest_by_text: dict[str, OCRResult] = field(default_factory=dict)
 
 
 class RealtimePlateRecognizer:
@@ -151,12 +152,14 @@ class RealtimePlateRecognizer:
             if result is not None:
                 if result.valid_plate_format:
                     state.vote_history.append(result.text)
+                    state.latest_by_text[result.text] = result
                     while len(state.vote_history) > self.stable_votes * 2:
                         state.vote_history.popleft()
                     winner, votes = Counter(state.vote_history).most_common(1)[0]
                     if votes >= self.stable_votes:
                         state.stable_text = winner
-                        state.stable_result = result
+                        # The winning reading, not this read when it lost the vote.
+                        state.stable_result = state.latest_by_text[winner]
                     elif not has_stable_text:
                         state.stable_result = result
                 elif not has_stable_text:

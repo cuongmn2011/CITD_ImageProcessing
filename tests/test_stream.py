@@ -97,6 +97,27 @@ def test_realtime_uses_tracking_and_stabilizes_text() -> None:
     assert backend.calls == 2
 
 
+def test_realtime_keeps_the_locked_reading_when_a_stray_read_loses_the_vote() -> None:
+    backend = SequenceBackend(
+        [
+            OCRResult("24A07816", 0.9, "fake"),
+            OCRResult("24A07816", 0.9, "fake"),
+            OCRResult("22A07816", 0.98, "fake"),
+        ]
+    )
+    recognizer = RealtimePlateRecognizer(
+        FakeDetector(), [backend], variants=("gray",), stable_votes=2, ocr_refresh_frames=1
+    )
+    image = np.zeros((20, 40, 3), dtype=np.uint8)
+
+    results = [recognizer.process_frame(image, frame) for frame in range(3)]
+
+    plate = results[-1].plates[0]
+    assert plate.status == "stable"
+    assert plate.recognition.ocr is not None
+    assert plate.recognition.ocr.text == "24A07816"
+
+
 def test_realtime_caches_stable_ocr_until_refresh_interval() -> None:
     detector = FakeDetector()
     backend = CountingBackend()
