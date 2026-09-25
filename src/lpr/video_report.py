@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import cv2
 import numpy as np
@@ -17,7 +17,12 @@ from .stream import FrameResult, RealtimePlateRecognizer
 
 @dataclass(slots=True)
 class TrackSummary:
-    """Everything seen for one tracked vehicle over a video."""
+    """Everything seen for one tracked vehicle over a video.
+
+    ``track_ids`` lists the tracker ids joined into this vehicle; a raw track has one.
+    ``votes`` counts the plate-shaped OCR reads per text, with their best confidence in
+    ``vote_confidence``.
+    """
 
     track_id: int
     first_frame: int
@@ -28,11 +33,16 @@ class TrackSummary:
     ocr_confidence: float = 0.0
     stable: bool = False
     detection_confidence: float = 0.0
+    frames_seen: int = 0
+    track_ids: tuple[int, ...] = ()
+    votes: dict[str, int] = field(default_factory=dict)
+    vote_confidence: dict[str, float] = field(default_factory=dict, repr=False)
     crop: np.ndarray | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "track_id": self.track_id,
+            "track_ids": list(self.track_ids),
             "first_frame": self.first_frame,
             "last_frame": self.last_frame,
             "first_time_ms": self.first_time_ms,
@@ -41,16 +51,21 @@ class TrackSummary:
             "ocr_confidence": self.ocr_confidence,
             "stable": self.stable,
             "detection_confidence": self.detection_confidence,
+            "frames_seen": self.frames_seen,
+            "votes": dict(self.votes),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class VideoReport:
+    """``tracks`` holds one entry per vehicle; ``fragments`` the raw tracker tracks."""
+
     frames_total: int
     frames_processed: int
     output_path: Path
     tracks: tuple[TrackSummary, ...]
     stopped: bool = False
+    fragments: tuple[TrackSummary, ...] = ()
 
 
 ProgressCallback = Callable[[int, int, list[TrackSummary]], None]
@@ -79,13 +94,23 @@ class _TrackAggregator:
             detection = plate.recognition.detection
             summary = self._tracks.get(plate.track_id)
             if summary is None:
-                summary = TrackSummary(plate.track_id, frame_id, frame_id, time_ms, time_ms)
+                summary = TrackSummary(
+                    plate.track_id, frame_id, frame_id, time_ms, time_ms,
+                    track_ids=(plate.track_id,),
+                )
                 self._tracks[plate.track_id] = summary
             summary.last_frame = frame_id
             summary.last_time_ms = time_ms
+            summary.frames_seen += 1
             if detection.confidence > summary.detection_confidence:
                 summary.detection_confidence = detection.confidence
                 summary.crop = crop(frame, detection)
+            read = plate.read
+            if read is not None and read.valid_plate_format:
+                summary.votes[read.text] = summary.votes.get(read.text, 0) + 1
+                summary.vote_confidence[read.text] = max(
+                    summary.vote_confidence.get(read.text, 0.0), read.confidence
+                )
             ocr = plate.recognition.ocr
             if ocr is None or not ocr.text:
                 continue
@@ -107,6 +132,113 @@ class _TrackAggregator:
 
     def summaries(self) -> list[TrackSummary]:
         return sorted(self._tracks.values(), key=lambda summary: summary.first_frame)
+
+
+def _pooled_votes(members: list[TrackSummary]) -> tuple[dict[str, int], dict[str, float]]:
+    votes: dict[str, int] = {}
+    confidence: dict[str, float] = {}
+    for member in members:
+        for text, count in member.votes.items():
+            votes[text] = votes.get(text, 0) + count
+            confidence[text] = max(confidence.get(text, 0.0), member.vote_confidence[text])
+    return votes, confidence
+
+
+def _best_reading(members: list[TrackSummary], stable_votes: int) -> tuple[str, bool, float]:
+    """Pick one reading for a vehicle by a vote over the OCR reads of all its fragments.
+
+    A fragment's own lock-in does not count: a vehicle split into short fragments gets a
+    read or two per fragment, too few for any fragment to lock in, and a lone longer
+    fragment could otherwise outvote them with a misread. Ties go to the reading shown
+    for more frames, then to OCR confidence.
+    """
+    votes, vote_confidence = _pooled_votes(members)
+    support = {text: (count, 0, vote_confidence[text]) for text, count in votes.items()}
+    for member in members:
+        if member.text:
+            count, frames, confidence = support.get(member.text, (0, 0, 0.0))
+            support[member.text] = (
+                count, frames + member.frames_seen, max(confidence, member.ocr_confidence)
+            )
+    if not support:
+        return "", False, 0.0
+    text = max(support, key=support.__getitem__)
+    count, _, confidence = support[text]
+    return text, count >= stable_votes, confidence
+
+
+def _same_plate(left: str, right: str, max_edits: int) -> bool:
+    # Short reads are mostly noise ("6", "86"), so they must match exactly; a plate cut
+    # off at the frame edge ("4A0781" for "24A07816") still joins its full reading.
+    allowed = min(max_edits, max(len(left), len(right)) // 4)
+    return edit_distance(left, right) <= allowed
+
+
+def merge_fragments(
+    fragments: Iterable[TrackSummary],
+    *,
+    max_gap_ms: float = 2000.0,
+    max_edits: int = 2,
+    stable_votes: int = 3,
+) -> list[TrackSummary]:
+    """Join tracks the tracker split off one vehicle, keeping one reading per vehicle.
+
+    A small, fast plate makes the tracker lose a vehicle and restart it under a new id;
+    a loose second box on the same plate gets its own id too. A fragment joins an earlier
+    vehicle when it starts within ``max_gap_ms`` of that vehicle's last sighting and their
+    readings differ by at most ``max_edits`` edits (fewer for short readings). Unread
+    fragments carry no evidence and stay separate. Two different vehicles with
+    near-identical plates seconds apart would be joined. A vehicle counts as stable once
+    its reading has ``stable_votes`` reads.
+    """
+    vehicles: list[list[TrackSummary]] = []
+    recent: list[list[TrackSummary]] = []
+    for fragment in sorted(fragments, key=lambda item: (item.first_frame, item.track_id)):
+        # Fragments arrive by start time, so a vehicle out of reach now stays out of reach.
+        recent = [
+            members
+            for members in recent
+            if fragment.first_time_ms - max(member.last_time_ms for member in members)
+            <= max_gap_ms
+        ]
+        match: list[TrackSummary] | None = None
+        if fragment.text:
+            best_distance = max_edits + 1
+            for members in recent:
+                text = _best_reading(members, stable_votes)[0]
+                if not text or not _same_plate(fragment.text, text, max_edits):
+                    continue
+                distance = edit_distance(fragment.text, text)
+                if distance < best_distance:
+                    match, best_distance = members, distance
+        if match is None:
+            match = []
+            vehicles.append(match)
+            recent.append(match)
+        match.append(fragment)
+    return [_combine(members, stable_votes) for members in vehicles]
+
+
+def _combine(members: list[TrackSummary], stable_votes: int) -> TrackSummary:
+    text, stable, confidence = _best_reading(members, stable_votes)
+    best_view = max(members, key=lambda member: member.detection_confidence)
+    votes, vote_confidence = _pooled_votes(members)
+    return TrackSummary(
+        track_id=members[0].track_id,
+        first_frame=min(member.first_frame for member in members),
+        last_frame=max(member.last_frame for member in members),
+        first_time_ms=min(member.first_time_ms for member in members),
+        last_time_ms=max(member.last_time_ms for member in members),
+        text=text,
+        ocr_confidence=confidence,
+        stable=stable,
+        detection_confidence=best_view.detection_confidence,
+        frames_seen=sum(member.frames_seen for member in members),
+        track_ids=tuple(track_id for member in members for track_id in member.track_ids),
+        votes=votes,
+        vote_confidence=vote_confidence,
+        crop=best_view.crop,
+    )
 
 
 def _open_writer(path: Path, fps: float, size: tuple[int, int]) -> tuple[cv2.VideoWriter, Path]:
@@ -132,6 +264,7 @@ def process_video(
     on_progress: ProgressCallback | None = None,
     on_frame: FrameCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
+    max_output_width: int | None = 1280,
 ) -> VideoReport:
     """Track and read plates across a video, writing an annotated copy.
 
@@ -140,9 +273,15 @@ def process_video(
     ``start_seconds``/``duration_seconds`` limit the run to one segment; timestamps in
     the report stay relative to the start of the source video. ``on_frame`` receives each
     annotated frame; ``should_stop`` ends the run early and still returns what was processed.
+    Tracks split off one vehicle are joined by ``merge_fragments``, both in the progress
+    callback and in the report. Recognition always runs on full-size frames; the annotated
+    copy is scaled down to ``max_output_width`` (``None`` keeps it full size), because
+    encoding 1080p WebM cost about as much per frame as plate detection.
     """
     if stride < 1:
         raise ValueError("stride must be at least 1")
+    if max_output_width is not None and max_output_width < 2:
+        raise ValueError("max_output_width must be at least 2")
     if start_seconds < 0 or (duration_seconds is not None and duration_seconds <= 0):
         raise ValueError("start_seconds must be >= 0 and duration_seconds > 0")
     capture = cv2.VideoCapture(str(input_path))
@@ -173,16 +312,22 @@ def process_video(
     if start_frame:
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
+    output_size = (width, height)
+    if max_output_width is not None and width > max_output_width:
+        # Codecs want even dimensions.
+        scaled_height = round(height * max_output_width / width / 2) * 2
+        output_size = (max_output_width // 2 * 2, max(2, scaled_height))
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        writer, destination = _open_writer(destination, fps / stride, (width, height))
+        writer, destination = _open_writer(destination, fps / stride, output_size)
     except ValueError:
         capture.release()
         raise
 
     recognizer.reset()
     aggregator = _TrackAggregator()
+    stable_votes = recognizer.stable_votes
 
     def crop(frame: np.ndarray, detection: Any) -> np.ndarray:
         return recognizer.detector.crop(frame, detection, padding=recognizer.crop_padding)
@@ -204,24 +349,30 @@ def process_video(
                 aggregator.update(frame, frame_index, time_ms, result, crop)
                 recognitions = [plate.recognition for plate in result.plates]
                 annotated = annotate_image(frame, recognitions)
+                if output_size != (width, height):
+                    annotated = cv2.resize(annotated, output_size, interpolation=cv2.INTER_AREA)
                 writer.write(annotated)
                 processed += 1
                 if on_frame is not None:
                     on_frame(annotated, frame_index)
                 if on_progress is not None:
                     on_progress(
-                        frame_index + 1 - start_frame, frames_total, aggregator.summaries()
+                        frame_index + 1 - start_frame,
+                        frames_total,
+                        merge_fragments(aggregator.summaries(), stable_votes=stable_votes),
                     )
             frame_index += 1
     finally:
         capture.release()
         writer.release()
+    fragments = aggregator.summaries()
     return VideoReport(
         frames_total=frames_total or frame_index - start_frame,
         frames_processed=processed,
         output_path=destination,
-        tracks=tuple(aggregator.summaries()),
+        tracks=tuple(merge_fragments(fragments, stable_votes=stable_votes)),
         stopped=stopped,
+        fragments=tuple(fragments),
     )
 
 

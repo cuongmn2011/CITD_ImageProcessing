@@ -130,10 +130,13 @@ def test_realtime_caches_stable_ocr_until_refresh_interval() -> None:
     )
     image = np.zeros((20, 40, 3), dtype=np.uint8)
 
-    recognizer.process_frame(image, 0)
-    recognizer.process_frame(image, 1)
+    first = recognizer.process_frame(image, 0)
+    cached = recognizer.process_frame(image, 1)
     recognizer.process_frame(image, 9)
     assert backend.calls == 1
+    # Only the frame that ran OCR reports a fresh read; the others reuse the shown text.
+    assert first.plates[0].read is not None and cached.plates[0].read is None
+    assert cached.plates[0].recognition.ocr is not None
 
     recognizer.process_frame(image, 10)
     assert backend.calls == 2

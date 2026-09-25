@@ -125,3 +125,17 @@ def test_paddleocr_backend_omits_rec_model_dir_by_default(monkeypatch) -> None:
     PaddleOCRBackend()
 
     assert "text_recognition_model_dir" not in calls
+    assert "text_detection_model_name" not in calls
+
+
+def test_paddleocr_backend_forwards_det_model_name(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend(det_model_name="PP-OCRv5_mobile_det")
+
+    assert calls["text_detection_model_name"] == "PP-OCRv5_mobile_det"

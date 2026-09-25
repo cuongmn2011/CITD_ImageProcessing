@@ -136,7 +136,14 @@ class PaddleOCRBackend:
 
     name = "paddleocr"
 
-    def __init__(self, language: str = "en", rec_model_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        language: str = "en",
+        rec_model_dir: str | None = None,
+        det_model_name: str | None = None,
+    ) -> None:
+        """``det_model_name`` picks the text detector, e.g. ``PP-OCRv5_mobile_det``, which
+        is about twice as fast on CPU as PaddleOCR's default server detector."""
         try:
             from paddleocr import PaddleOCR
         except ImportError as error:
@@ -149,6 +156,8 @@ class PaddleOCRBackend:
             # Paddle 3.x oneDNN crashes the CPU text detector on this backend.
             "enable_mkldnn": False,
         }
+        if det_model_name is not None:
+            kwargs["text_detection_model_name"] = det_model_name
         if rec_model_dir is not None:
             kwargs["text_recognition_model_dir"] = rec_model_dir
             # PaddleX asserts the requested model name equals the exported model's own name,

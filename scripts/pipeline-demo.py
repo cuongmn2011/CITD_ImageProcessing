@@ -204,7 +204,9 @@ function renderTracks(jobId, tracks) {
   // Newest vehicle first, so the row for what is on screen now is at the top.
   for (const track of [...tracks].reverse()) {
     const row = document.createElement("tr");
-    const cells = [String(track.track_id), "", track.text || "(chưa đọc được)",
+    // A vehicle the tracker lost and picked up again lists every track id it was joined from.
+    const ids = track.track_ids && track.track_ids.length ? track.track_ids : [track.track_id];
+    const cells = [ids.join(" + "), "", track.text || "(chưa đọc được)",
       track.stable ? "đã chốt" : "chưa chốt",
       `${formatTime(track.first_time_ms)} – ${formatTime(track.last_time_ms)}`];
     cells.forEach((value, index) => {
@@ -557,6 +559,7 @@ def create_app(
                         "stopped": job.stopped,
                         "output_name": job.output_name,
                         "tracks": job.tracks,
+                        "fragments": [track.to_dict() for track in report.fragments],
                     },
                     indent=2,
                 ),
@@ -697,6 +700,12 @@ def main() -> None:
         default="model/ocr-rec-training-merged/inference",
         help="Exported PaddleOCR inference directory (inference.json/.pdiparams/.yml)",
     )
+    parser.add_argument(
+        "--ocr-det-model",
+        default="PP-OCRv5_mobile_det",
+        help="PaddleOCR text detector; PP-OCRv5_server_det (PaddleOCR's default) was about "
+        "twice as slow on CPU without reading better on the labelled test plates",
+    )
     parser.add_argument("--confidence", type=float, default=0.4)
     parser.add_argument(
         "--imgsz",
@@ -726,7 +735,7 @@ def main() -> None:
             model_path, confidence=args.confidence, device=args.device, imgsz=args.imgsz
         )
 
-    backend = PaddleOCRBackend(rec_model_dir=args.rec_model_dir)
+    backend = PaddleOCRBackend(rec_model_dir=args.rec_model_dir, det_model_name=args.ocr_det_model)
     recognizer = LicensePlateRecognizer(make_detector(), [backend])
 
     def make_video_recognizer(variants: tuple[str, ...]) -> RealtimePlateRecognizer:

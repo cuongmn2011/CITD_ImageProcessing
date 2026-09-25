@@ -5,17 +5,24 @@ import pytest
 from lpr.detector import PlateDetection
 from lpr.ocr import OCRResult
 from lpr.stream import RealtimePlateRecognizer
-from lpr.video_report import process_video, score_against_ground_truth
+from lpr.video_report import (
+    TrackSummary,
+    merge_fragments,
+    process_video,
+    score_against_ground_truth,
+)
 
 
 class FakeTrackingDetector:
     def __init__(self, track_id: int | None = 7) -> None:
         self.track_id = track_id
+        self.calls = 0
 
     def detect(self, image: np.ndarray) -> list[PlateDetection]:
         return self.track(image)
 
     def track(self, image: np.ndarray) -> list[PlateDetection]:
+        self.calls += 1
         return [PlateDetection((5, 5, 40, 20), 0.9, 0, self.track_id)]
 
     @staticmethod
@@ -88,6 +95,28 @@ def test_process_video_skips_untracked_detections(tmp_path) -> None:
     assert report.tracks == ()
 
 
+def test_process_video_scales_the_annotated_copy_down(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source)
+    shown: list[tuple[int, ...]] = []
+
+    report = process_video(
+        _recognizer(),
+        source,
+        tmp_path / "out.mp4",
+        max_output_width=32,
+        on_frame=lambda image, index: shown.append(image.shape),
+    )
+
+    capture = cv2.VideoCapture(str(report.output_path))
+    size = (capture.get(cv2.CAP_PROP_FRAME_WIDTH), capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    capture.release()
+    assert size == (32, 24)
+    assert shown[0] == (24, 32, 3)
+    # Recognition still ran on the full-size frame: the crop keeps full resolution.
+    assert report.tracks[0].crop.shape[:2] == (15, 35)
+
+
 def test_process_video_rejects_invalid_stride(tmp_path) -> None:
     with pytest.raises(ValueError, match="stride"):
         process_video(_recognizer(), tmp_path / "in.mp4", tmp_path / "out.mp4", stride=0)
@@ -155,3 +184,113 @@ def test_process_video_rejects_start_past_end(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="past the end"):
         process_video(_recognizer(), source, tmp_path / "out.mp4", start_seconds=5)
+
+
+def _fragment(
+    track_id: int,
+    first: int,
+    last: int,
+    text: str = "",
+    *,
+    stable: bool = False,
+    votes: int = 1,
+    confidence: float = 0.9,
+    detection_confidence: float = 0.8,
+) -> TrackSummary:
+    """A raw track at 10 fps, seen on every frame from ``first`` to ``last``, whose
+    reading came from ``votes`` OCR reads."""
+    read = {text: votes} if text and votes else {}
+    return TrackSummary(
+        track_id,
+        first,
+        last,
+        first * 100.0,
+        last * 100.0,
+        text=text,
+        ocr_confidence=confidence,
+        stable=stable,
+        detection_confidence=detection_confidence,
+        frames_seen=last - first + 1,
+        track_ids=(track_id,),
+        votes=read,
+        vote_confidence={text: confidence for text in read},
+        crop=np.full((2, 2), track_id, dtype=np.uint8),
+    )
+
+
+def test_merge_joins_a_split_vehicle_and_keeps_its_best_reading() -> None:
+    # Pieces of one car from a real run: a read cut off at the frame edge, a misread,
+    # and a second, looser box on the same plate while the main track was still alive.
+    vehicles = merge_fragments(
+        [
+            _fragment(1, 0, 1, "4A0781", votes=0),
+            _fragment(4, 3, 12, "24A07816", votes=3, detection_confidence=0.7),
+            _fragment(9, 14, 17, "22A07816", detection_confidence=0.9),
+            _fragment(12, 16, 20, "24A07816"),
+        ]
+    )
+
+    assert len(vehicles) == 1
+    vehicle = vehicles[0]
+    assert (vehicle.track_id, vehicle.track_ids) == (1, (1, 4, 9, 12))
+    assert (vehicle.first_frame, vehicle.last_frame, vehicle.frames_seen) == (0, 20, 21)
+    assert (vehicle.text, vehicle.stable) == ("24A07816", True)
+    assert vehicle.votes == {"24A07816": 4, "22A07816": 1}
+    # The crop comes from the fragment with the most confident detection.
+    assert vehicle.detection_confidence == 0.9 and vehicle.crop[0, 0] == 9
+
+
+def test_merge_votes_over_all_reads_rather_than_one_locked_fragment() -> None:
+    # A real pickup, plate 24C09238: one fragment locked in on a misread with 3 reads,
+    # five short fragments read it right once each but were too short to lock in.
+    fragments = [_fragment(94, 0, 9, "24G09238", votes=3, stable=True)] + [
+        _fragment(track_id, first, first + 1, "24C09238")
+        for track_id, first in [(101, 15), (105, 20), (109, 27), (113, 32), (118, 39)]
+    ]
+
+    vehicles = merge_fragments(fragments)
+
+    assert [(vehicle.text, vehicle.stable) for vehicle in vehicles] == [("24C09238", True)]
+
+
+def test_merge_keeps_distinct_vehicles_apart() -> None:
+    # Readings from a real run: six vehicles, 0.2 s apart, some read as short noise.
+    readings = ["3T4073", "51F22029", "605140494", "6", "86", "676103786"]
+    fragments = [
+        _fragment(index + 1, index * 15, index * 15 + 13, text)
+        for index, text in enumerate(readings)
+    ]
+
+    assert [vehicle.text for vehicle in merge_fragments(fragments)] == readings
+
+
+def test_merge_needs_a_short_gap_and_a_reading() -> None:
+    far_apart = [_fragment(1, 0, 9, "51G48154"), _fragment(2, 40, 49, "51G48154")]
+    unread = [_fragment(1, 0, 9, "51G48154"), _fragment(2, 10, 19)]
+
+    assert len(merge_fragments(far_apart)) == 2
+    assert [vehicle.text for vehicle in merge_fragments(unread)] == ["51G48154", ""]
+
+
+class SwitchingTrackDetector(FakeTrackingDetector):
+    """Loses the vehicle halfway and picks it up again under a new id."""
+
+    def track(self, image: np.ndarray) -> list[PlateDetection]:
+        self.track_id = 7 if self.calls < 5 else 8
+        return super().track(image)
+
+
+def test_process_video_reports_one_vehicle_for_a_split_track(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source)
+
+    report = process_video(_recognizer(SwitchingTrackDetector()), source, tmp_path / "out.mp4")
+
+    assert [fragment.track_id for fragment in report.fragments] == [7, 8]
+    assert len(report.tracks) == 1
+    vehicle = report.tracks[0]
+    assert (vehicle.track_ids, vehicle.text) == ((7, 8), "51G48154")
+    assert (vehicle.first_frame, vehicle.last_frame) == (0, 9)
+    # Neither half had the 3 reads to lock in; together they do (OCR on frames 0, 3, 5, 8).
+    assert not any(fragment.stable for fragment in report.fragments)
+    assert (vehicle.votes, vehicle.stable) == ({"51G48154": 4}, True)

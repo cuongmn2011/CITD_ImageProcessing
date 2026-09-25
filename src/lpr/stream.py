@@ -26,12 +26,17 @@ class StreamingDetector(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class StreamPlate:
-    """One plate result enriched with temporal state for a live UI."""
+    """One plate result enriched with temporal state for a live UI.
+
+    ``recognition.ocr`` is the reading to show, often cached from earlier frames; ``read``
+    is the OCR result computed on this frame, or ``None`` when OCR did not run.
+    """
 
     recognition: PlateRecognition
     track_id: int | None
     stable: bool
     status: Literal["stable", "candidate", "detected"]
+    read: OCRResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,10 +125,10 @@ class RealtimePlateRecognizer:
             active_keys.add(key)
             state = self._tracks.setdefault(key, _TrackState(last_seen_frame=frame_id))
             state.last_seen_frame = frame_id
-            recognition = self._recognize_detection(image, detection, state, frame_id)
+            recognition, read = self._recognize_detection(image, detection, state, frame_id)
             stable = bool(state.stable_text)
             status = "stable" if stable else ("candidate" if recognition.ocr else "detected")
-            plates.append(StreamPlate(recognition, detection.track_id, stable, status))
+            plates.append(StreamPlate(recognition, detection.track_id, stable, status, read))
         self._evict_stale(frame_id, active_keys)
         return FrameResult(
             frame_id=frame_id,
@@ -138,21 +143,23 @@ class RealtimePlateRecognizer:
         detection: PlateDetection,
         state: _TrackState,
         frame_id: int,
-    ) -> PlateRecognition:
+    ) -> tuple[PlateRecognition, OCRResult | None]:
+        """Return the reading to show and, when OCR ran on this frame, its fresh result."""
         has_stable_text = bool(state.stable_text)
         refresh_after = self.ocr_refresh_frames if has_stable_text else self.ocr_retry_frames
         should_refresh = (
             state.last_ocr_frame < 0
             or frame_id - state.last_ocr_frame >= refresh_after
         )
+        read: OCRResult | None = None
         if should_refresh:
             crop = self.detector.crop(image, detection, padding=self.crop_padding)
-            result = self._recognize_crop(crop)
+            read = self._recognize_crop(crop)
             state.last_ocr_frame = frame_id
-            if result is not None:
-                if result.valid_plate_format:
-                    state.vote_history.append(result.text)
-                    state.latest_by_text[result.text] = result
+            if read is not None:
+                if read.valid_plate_format:
+                    state.vote_history.append(read.text)
+                    state.latest_by_text[read.text] = read
                     while len(state.vote_history) > self.stable_votes * 2:
                         state.vote_history.popleft()
                     winner, votes = Counter(state.vote_history).most_common(1)[0]
@@ -161,11 +168,10 @@ class RealtimePlateRecognizer:
                         # The winning reading, not this read when it lost the vote.
                         state.stable_result = state.latest_by_text[winner]
                     elif not has_stable_text:
-                        state.stable_result = result
+                        state.stable_result = read
                 elif not has_stable_text:
-                    state.stable_result = result
-        result = state.stable_result
-        return PlateRecognition(detection, result)
+                    state.stable_result = read
+        return PlateRecognition(detection, state.stable_result), read
 
     def _recognize_crop(self, crop: np.ndarray) -> OCRResult | None:
         variants = generate_variants(crop, self.variants)
