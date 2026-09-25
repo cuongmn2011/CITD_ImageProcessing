@@ -104,6 +104,61 @@ Scope is deliberately small; this is a direction signal, **not** an accuracy cla
   errors. Project defaults stay unchanged until this is confirmed on a real street-camera
   video with a hand-labelled plate list.
 
+### Street video: one reading per vehicle (2026-09-26)
+
+Scope: the first 30 s (900 frames, 1920×1080, 30 fps) of one user-supplied street video
+(`outputs/video-jobs/<job>/input.mp4`, not committed). No hand-labelled plate list exists yet,
+so there is **no accuracy figure** here. Three plates were checked by eye on enlarged frames:
+`24A07816`, `29K10425`, `24C09238`. Run: `lpr.video_report.process_video`, variant `raw`,
+stride 1, imgsz 640, local CPU (i7-1185G7, no CUDA).
+
+- **Fragmentation.** ByteTrack returned 52 tracks for about 6 vehicles; the report used to show
+  one row per track. Small, fast plates move so far between frames that their boxes do not
+  overlap, so ByteTrack never confirms a track and returns no box. About every 6th source
+  frame repeats the previous one; only there does the plate stand still, and a track is
+  confirmed once, under a new id. Fragments of those vehicles start exactly on repeated frames.
+- **Skipping repeated frames was tried and reverted.** It cut tracks from 52 to 16 but lost the
+  motorbike `24X1 124.42` entirely and left the `24C09238` pickup with 4 frames: the repeated
+  frames were the only frames in which ByteTrack returned those plates.
+- **Merge + vote.** `merge_fragments` joins fragments within 2 s whose readings differ by at most
+  2 edits (fewer for short readings), and picks each vehicle's reading by a vote over every OCR
+  read of all its fragments. Fixed along the way: once a track had locked in, a stray read that
+  lost the vote was still shown (`24A07816` drawn as `22A07816`).
+
+| Rule for the vehicle's reading | Rows | `24A07816` | `29K10425` | `24C09238` |
+|---|---:|---|---|---|
+| none (one row per track) | 52 | 10 rows | 2 rows | 7 rows |
+| merge, locked-in fragment first | 18 | correct | correct | `24G09238` (wrong) |
+| merge, vote over all reads | 20 | correct (15 of 16 reads) | correct (7 of 14 reads) | correct (6 of 8 reads) |
+
+The last row also uses the mobile text detector (below), which changes individual reads. The
+remaining rows are mostly unread fragments and 1–3 character noise.
+
+**Where the time goes.** 60 frames with vehicles, measured while another inference process
+shared the CPU, so absolute times are inflated; the ratios are comparable.
+
+| Stage | Time |
+|---|---:|
+| YOLO + ByteTrack | 314 ms / frame |
+| PaddleOCR, server text detector + fine-tuned rec | 675 ms / read |
+| Writing the annotated copy, VP8 WebM 1920×1080 | 182 ms / frame |
+| Drawing boxes, live-view JPEG | 9 ms / frame |
+
+| PaddleOCR text detector (18 crops, 6 labelled slideshow plates × 3 frames) | Time / read | Exact | CER |
+|---|---:|---:|---:|
+| `PP-OCRv5_server_det` (PaddleOCR default) | 667 ms | 6/18 | 0.082 |
+| `PP-OCRv5_mobile_det` | 339 ms | 7/18 | 0.075 |
+
+- oneDNN (`enable_mkldnn=True`) fails with both detectors: `NotImplementedError ...
+  ConvertPirAttribute2RuntimeAttribute`. Recognition alone on the whole crop, without the text
+  detector, returned 1–5 character strings on street crops and is not usable.
+- VP8 encoding per frame: 1920×1080 208 ms, 1280×720 107 ms, 960×540 61 ms.
+- Adopted in `scripts/pipeline-demo.py` only: `--ocr-det-model PP-OCRv5_mobile_det` (default) and
+  an annotated copy capped at 1280 px wide. `lpr` CLI/server defaults are unchanged; 18 crops is
+  a direction signal, not an accuracy claim.
+- Whole 30 s run: 391 s before these two changes, 343 s after; the demo server was also running
+  during the start of the second run, so the gain is not measured cleanly.
+
 
 ## 5. What is not yet claimed
 
