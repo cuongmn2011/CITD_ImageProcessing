@@ -191,6 +191,16 @@ To try the OCR model alone on a cropped plate image, run
 `uv run python scripts/ocr-demo.py --model-dir path/to/inference` and open
 http://127.0.0.1:8080 (needs `uv sync --extra web --extra paddle`).
 
+To test detection plus OCR together, run
+`uv run python scripts/pipeline-demo.py --model outputs/citd-yolo11s-training.zip --rec-model-dir path/to/inference`
+and open http://127.0.0.1:8081 (needs `uv sync --extra web --extra paddle --extra vision`).
+The **Image** tab reads one full photo. The **Video** tab tracks each vehicle through an uploaded
+video, votes on its plate, lists one result per vehicle, and scores them against a pasted list of
+the true plates (exact accuracy, CER, misread/missed). Each run is kept under
+`outputs/video-jobs/<job_id>/` (annotated WebM, plate crops, `report.json`, `score.json`).
+On CPU expect roughly 0.6 s per frame; `--imgsz 960` or `1280` helps with small, distant plates
+at extra cost.
+
 The dataset source and license caveat are documented in
 [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md). No OCR accuracy claim is made
 until a real fine-tuning run and held-out evaluation exist.

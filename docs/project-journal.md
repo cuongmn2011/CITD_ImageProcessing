@@ -77,6 +77,33 @@ Latest local verification is maintained in [code-review-and-training-report.md](
 - Detector validation metrics are recorded from the real `run/results.csv` artifact.
 - No OCR/end-to-end metric is inferred from detector metrics.
 
+### End-to-end smoke test: preprocessing variant (2026-09-25)
+
+Scope is deliberately small; this is a direction signal, **not** an accuracy claim.
+
+- Input: a 90-frame slideshow video (10 fps, 15 frames per photo) built from 6 photos drawn at
+  random from the detector dataset's `valid/` split: 1 one-line car plate, 4 two-line motorbike
+  plates, 1 military plate. Parking/gate-camera images, not street footage.
+- Ground truth: read manually from each photo.
+- Models: YOLO `outputs/citd-yolo11s-training.zip` (`best.pt`), fine-tuned PaddleOCR
+  `PP-OCRv5_mobile_rec` exported to `model/ocr-rec-training-merged/inference`.
+- Run: `scripts/pipeline-demo.py` video mode (`RealtimePlateRecognizer`, ByteTrack tracking,
+  3-vote stabilization), stride 1, imgsz 640, local CPU. Scored with
+  `lpr.video_report.score_against_ground_truth`.
+
+| Variant | Correct / 6 | Wrong | Missed | Exact accuracy | CER |
+|---|---:|---:|---:|---:|---:|
+| `otsu` (current default) | 1 | 3 | 2 | 0.167 | 0.429 |
+| `raw` (colour crop) | 4 | 2 | 0 | 0.667 | 0.041 |
+
+- With `otsu`, two-line motorbike plates had the letter read as a digit (`60F1` → `6051`) or
+  were not read at all; `raw` read three of the four correctly. The remaining `raw` errors:
+  `59P223103` → `599223103` (P read as 9) and military `KT6073` → `KT4073`.
+- Throughput: 90 frames in about 55 s on local CPU (≈0.6 s/frame).
+- Conclusion for now: Otsu binarization, not only the two-line layout, drove the motorbike
+  errors. Project defaults stay unchanged until this is confirmed on a real street-camera
+  video with a hand-labelled plate list.
+
 
 ## 5. What is not yet claimed
 
