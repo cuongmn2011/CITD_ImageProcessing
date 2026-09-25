@@ -166,3 +166,41 @@ def test_video_mode_disabled_without_factory(tmp_path) -> None:
     client = TestClient(create_app(_recognizer(), None, tmp_path))
 
     assert client.post("/api/video", content=b"x").status_code == 503
+
+
+def test_video_job_serves_live_frame_and_segment(tmp_path) -> None:
+    client = TestClient(create_app(_recognizer(), _video_factory(), tmp_path))
+    video = _video_bytes(tmp_path)  # 8 frames at 10 fps
+
+    job_id = client.post(
+        "/api/video?filename=a.mp4&start=0.2&duration=0.4", content=video
+    ).json()["job_id"]
+    job = _wait_done(client, job_id)
+
+    assert job["state"] == "done", job["error"]
+    assert (job["frames_processed"], job["frame_seq"]) == (4, 4)
+    frame = client.get(f"/api/video/{job_id}/frame.jpg")
+    assert frame.status_code == 200 and frame.headers["content-type"] == "image/jpeg"
+
+
+def test_video_job_can_be_stopped_and_keeps_partial_report(tmp_path) -> None:
+    started, release = threading.Event(), threading.Event()
+    client = TestClient(create_app(_recognizer(), _video_factory(started, release), tmp_path))
+
+    job_id = client.post("/api/video?filename=a.mp4", content=_video_bytes(tmp_path)).json()[
+        "job_id"
+    ]
+    assert started.wait(timeout=10)
+    assert client.post(f"/api/video/{job_id}/stop").json() == {"state": "running"}
+    release.set()
+    job = _wait_done(client, job_id)
+
+    assert (job["state"], job["stopped"], job["frames_processed"]) == ("done", True, 0)
+    assert (tmp_path / job_id / "report.json").is_file()
+    assert client.get(f"/api/video/{job_id}/frame.jpg").status_code == 404
+
+
+def test_video_upload_rejects_negative_segment(tmp_path) -> None:
+    client = TestClient(create_app(_recognizer(), _video_factory(), tmp_path))
+
+    assert client.post("/api/video?start=-1", content=b"x").status_code == 400

@@ -35,7 +35,7 @@ def _write_video(path, frames: int = 10) -> None:
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 48))
     assert writer.isOpened()
     for index in range(frames):
-        writer.write(np.full((48, 64, 3), index * 20, dtype=np.uint8))
+        writer.write(np.full((48, 64, 3), (index * 20) % 256, dtype=np.uint8))
     writer.release()
 
 
@@ -110,3 +110,48 @@ def test_score_matches_one_to_one_and_classifies_reads() -> None:
 def test_score_requires_ground_truth() -> None:
     with pytest.raises(ValueError, match="at least one plate"):
         score_against_ground_truth(["51G48154"], ["", "  "])
+
+
+def test_process_video_limits_to_a_segment_and_streams_frames(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source, frames=20)  # 10 fps, 2 s
+    frames: list[int] = []
+
+    report = process_video(
+        _recognizer(),
+        source,
+        tmp_path / "out.mp4",
+        start_seconds=0.5,
+        duration_seconds=0.8,
+        on_frame=lambda image, index: frames.append(index),
+    )
+
+    assert frames == list(range(5, 13))
+    assert (report.frames_total, report.frames_processed) == (8, 8)
+    assert report.tracks[0].first_time_ms == pytest.approx(500.0)
+
+
+def test_process_video_stops_early_and_keeps_partial_results(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source)
+    seen: list[int] = []
+
+    report = process_video(
+        _recognizer(),
+        source,
+        tmp_path / "out.mp4",
+        on_frame=lambda image, index: seen.append(index),
+        should_stop=lambda: len(seen) >= 3,
+    )
+
+    assert report.stopped is True
+    assert report.frames_processed == 3
+    assert len(report.tracks) == 1
+
+
+def test_process_video_rejects_start_past_end(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source)
+
+    with pytest.raises(ValueError, match="past the end"):
+        process_video(_recognizer(), source, tmp_path / "out.mp4", start_seconds=5)

@@ -26,9 +26,10 @@ import cv2
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+LIVE_FRAME_WIDTH = 960
 MAX_VIDEO_BYTES = 500 * 1024 * 1024
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
 
@@ -92,12 +93,21 @@ PAGE = """<!doctype html>
       </select>
     </label>
   </p>
-  <p class="muted">Xe chạy nhanh chỉ xuất hiện trong ít frame, bỏ bớt frame nhiều dễ sót xe.</p>
+  <p>
+    <label>Bắt đầu từ giây: <input id="start" type="number" min="0" step="1" value="0"
+      style="width:5rem"></label>
+    <label>Chỉ xử lý (giây, 0 = đến hết video): <input id="duration" type="number" min="0"
+      step="1" value="60" style="width:5rem"></label>
+  </p>
+  <p class="muted">Xe chạy nhanh chỉ xuất hiện trong ít frame, bỏ bớt frame nhiều dễ sót xe.
+    Trên CPU khoảng 0,6 giây mỗi frame: 60 giây video 30fps mất khoảng 18 phút.</p>
   <div id="video-drop" class="drop">Kéo thả video vào đây hoặc bấm để chọn
     <input id="video-file" type="file" accept="video/*" hidden>
   </div>
   <div id="video-status"></div>
   <progress id="video-progress" max="1" value="0" hidden></progress>
+  <button id="stop-button" hidden>Dừng (giữ kết quả đã xử lý)</button>
+  <img id="live-frame" class="result" hidden alt="frame đang xử lý">
   <video id="video-result" controls hidden></video>
   <p id="video-download" hidden></p>
   <table id="track-table" hidden>
@@ -186,22 +196,26 @@ function formatTime(ms) {
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, "0")}`;
 }
 
-function renderTracks(jobId, tracks, done) {
+function renderTracks(jobId, tracks) {
   const table = $("track-table");
   const body = table.querySelector("tbody");
   body.textContent = "";
   table.hidden = tracks.length === 0;
-  for (const track of tracks) {
+  // Newest vehicle first, so the row for what is on screen now is at the top.
+  for (const track of [...tracks].reverse()) {
     const row = document.createElement("tr");
     const cells = [String(track.track_id), "", track.text || "(chưa đọc được)",
       track.stable ? "đã chốt" : "chưa chốt",
       `${formatTime(track.first_time_ms)} – ${formatTime(track.last_time_ms)}`];
     cells.forEach((value, index) => {
       const cell = document.createElement("td");
-      if (index === 1 && done) {
+      if (index === 1) {
         const image = document.createElement("img");
-        image.src = `/api/video/${jobId}/crop/${track.track_id}.jpg`;
+        // The crop improves while the vehicle is tracked; the version tag refreshes it.
+        image.src = `/api/video/${jobId}/crop/${track.track_id}.jpg` +
+          `?v=${track.detection_confidence}`;
         image.alt = "biển số";
+        image.onerror = () => { image.hidden = true; };
         cell.appendChild(image);
       } else {
         cell.textContent = value;
@@ -214,6 +228,7 @@ function renderTracks(jobId, tracks, done) {
 }
 
 let currentJob = null;
+let shownFrame = -1;
 
 async function pollJob(jobId) {
   const status = $("video-status");
@@ -225,18 +240,26 @@ async function pollJob(jobId) {
     progress.max = total || 1;
     progress.value = Math.min(job.frames_done, total || 1);
     const count = `${job.tracks.length} xe`;
+    renderTracks(jobId, job.tracks);
     if (job.state === "running") {
       status.textContent = `Đang xử lý frame ${job.frames_done}/${total || "?"} · ${count}`;
-      renderTracks(jobId, job.tracks, false);
-      setTimeout(() => pollJob(jobId), 1000);
+      if (job.frame_seq > 0 && job.frame_seq !== shownFrame) {
+        shownFrame = job.frame_seq;
+        $("live-frame").src = `/api/video/${jobId}/frame.jpg?s=${job.frame_seq}`;
+        $("live-frame").hidden = false;
+      }
+      $("stop-button").hidden = false;
+      setTimeout(() => pollJob(jobId), 500);
       return;
     }
+    $("stop-button").hidden = true;
+    $("live-frame").hidden = true;
     if (job.state === "error") {
       setError(status, job.error || "không rõ");
       return;
     }
-    status.textContent = `Xong: ${job.frames_processed} frame đã xử lý · ${count}`;
-    renderTracks(jobId, job.tracks, true);
+    status.textContent = (job.stopped ? "Đã dừng" : "Xong") +
+      `: ${job.frames_processed} frame đã xử lý · ${count}`;
     const videoUrl = `/api/video/${jobId}/video`;
     if (job.output_name.endsWith(".webm")) {
       $("video-result").src = videoUrl;
@@ -262,11 +285,15 @@ async function sendVideo(file) {
   $("score-box").hidden = true;
   $("score-result").textContent = "";
   $("track-table").hidden = true;
+  $("live-frame").hidden = true;
+  shownFrame = -1;
   status.textContent = "Đang tải video lên...";
   const params = new URLSearchParams({
     stride: $("stride").value,
     variants: $("variants").value,
     filename: file.name,
+    start: $("start").value || "0",
+    duration: $("duration").value || "0",
   });
   try {
     const job = await readJson(await fetch(`/api/video?${params}`, { method: "POST", body: file }));
@@ -276,6 +303,12 @@ async function sendVideo(file) {
     setError(status, error.message);
   }
 }
+
+$("stop-button").addEventListener("click", async () => {
+  if (!currentJob) return;
+  $("stop-button").hidden = true;
+  await fetch(`/api/video/${currentJob}/stop`, { method: "POST" });
+});
 
 $("score-button").addEventListener("click", async () => {
   const output = $("score-result");
@@ -338,13 +371,21 @@ class _VideoJob:
     directory: Path
     stride: int
     variants: tuple[str, ...]
+    start_seconds: float = 0.0
+    duration_seconds: float | None = None
     state: str = "running"
     frames_done: int = 0
     frames_total: int = 0
     frames_processed: int = 0
     output_name: str = ""
     error: str = ""
+    stopped: bool = False
+    stop_requested: bool = False
     tracks: list[dict[str, Any]] = field(default_factory=list)
+    # Live view while running: last annotated frame and each track's best crop so far.
+    latest_frame: bytes | None = None
+    frame_seq: int = 0
+    live_crops: dict[int, np.ndarray] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -352,11 +393,15 @@ class _VideoJob:
             "state": self.state,
             "stride": self.stride,
             "variants": list(self.variants),
+            "start_seconds": self.start_seconds,
+            "duration_seconds": self.duration_seconds,
             "frames_done": self.frames_done,
             "frames_total": self.frames_total,
             "frames_processed": self.frames_processed,
+            "frame_seq": self.frame_seq,
             "output_name": self.output_name,
             "error": self.error,
+            "stopped": self.stopped,
             "tracks": self.tracks,
         }
 
@@ -386,6 +431,7 @@ def _load_finished_jobs(jobs_dir: Path) -> dict[str, _VideoJob]:
                 frames_total=int(report["frames_total"]),
                 frames_processed=int(report["frames_processed"]),
                 output_name=str(report["output_name"]),
+                stopped=bool(report.get("stopped", False)),
                 tracks=list(report["tracks"]),
             )
         except (OSError, ValueError, KeyError, TypeError):
@@ -457,6 +503,21 @@ def create_app(
             job.frames_done = done
             job.frames_total = total
             job.tracks = [track.to_dict() for track in tracks]
+            job.live_crops = {
+                track.track_id: track.crop for track in tracks if track.crop is not None
+            }
+
+        def on_frame(annotated: np.ndarray, frame_index: int) -> None:
+            height, width = annotated.shape[:2]
+            if width > LIVE_FRAME_WIDTH:
+                scale = LIVE_FRAME_WIDTH / width
+                annotated = cv2.resize(
+                    annotated, (LIVE_FRAME_WIDTH, int(height * scale)), interpolation=cv2.INTER_AREA
+                )
+            ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                job.latest_frame = encoded.tobytes()
+                job.frame_seq += 1
 
         try:
             with image_lock:
@@ -466,7 +527,11 @@ def create_app(
                     input_path,
                     job.directory / "annotated.webm",
                     stride=job.stride,
+                    start_seconds=job.start_seconds,
+                    duration_seconds=job.duration_seconds,
                     on_progress=on_progress,
+                    on_frame=on_frame,
+                    should_stop=lambda: job.stop_requested,
                 )
             crops_dir = job.directory / "crops"
             crops_dir.mkdir(exist_ok=True)
@@ -478,13 +543,18 @@ def create_app(
             job.frames_done = report.frames_total
             job.frames_processed = report.frames_processed
             job.output_name = report.output_path.name
+            job.stopped = report.stopped
+            job.live_crops = {}
             (job.directory / "report.json").write_text(
                 json.dumps(
                     {
                         "stride": job.stride,
                         "variants": list(job.variants),
+                        "start_seconds": job.start_seconds,
+                        "duration_seconds": job.duration_seconds,
                         "frames_total": job.frames_total,
                         "frames_processed": job.frames_processed,
+                        "stopped": job.stopped,
                         "output_name": job.output_name,
                         "tracks": job.tracks,
                     },
@@ -499,12 +569,19 @@ def create_app(
 
     @app.post("/api/video")
     async def upload_video(
-        request: Request, stride: int = 1, variants: str = "otsu", filename: str = "video.mp4"
+        request: Request,
+        stride: int = 1,
+        variants: str = "otsu",
+        filename: str = "video.mp4",
+        start: float = 0.0,
+        duration: float = 0.0,
     ) -> dict[str, str]:
         if make_video_recognizer is None:
             raise HTTPException(status_code=503, detail="Chế độ video chưa được bật")
         if stride < 1 or stride > 10:
             raise HTTPException(status_code=400, detail="stride phải từ 1 đến 10")
+        if start < 0 or duration < 0:
+            raise HTTPException(status_code=400, detail="start và duration không được âm")
         parsed_variants = _parse_variants(variants)
         suffix = Path(filename).suffix.lower()
         if suffix not in VIDEO_SUFFIXES:
@@ -515,7 +592,14 @@ def create_app(
             job_id = uuid.uuid4().hex[:12]
             directory = jobs_dir / job_id
             directory.mkdir(parents=True)
-            job = _VideoJob(job_id, directory, stride, parsed_variants)
+            job = _VideoJob(
+                job_id,
+                directory,
+                stride,
+                parsed_variants,
+                start_seconds=start,
+                duration_seconds=duration or None,
+            )
             jobs[job_id] = job
 
         input_path = directory / f"input{suffix}"
@@ -551,12 +635,32 @@ def create_app(
         media_type = "video/webm" if path.suffix == ".webm" else "video/mp4"
         return FileResponse(path, media_type=media_type, filename=path.name)
 
+    @app.get("/api/video/{job_id}/frame.jpg")
+    def video_frame(job_id: str) -> Response:
+        frame = get_job(job_id).latest_frame
+        if frame is None:
+            raise HTTPException(status_code=404, detail="Chưa có frame nào")
+        return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/video/{job_id}/stop")
+    def video_stop(job_id: str) -> dict[str, str]:
+        job = get_job(job_id)
+        if job.state == "running":
+            job.stop_requested = True
+        return {"state": job.state}
+
     @app.get("/api/video/{job_id}/crop/{track_id}.jpg")
-    def video_crop(job_id: str, track_id: int) -> FileResponse:
-        path = get_job(job_id).directory / "crops" / f"{track_id}.jpg"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="Không có ảnh biển số")
-        return FileResponse(path, media_type="image/jpeg")
+    def video_crop(job_id: str, track_id: int) -> Response:
+        job = get_job(job_id)
+        path = job.directory / "crops" / f"{track_id}.jpg"
+        if path.is_file():
+            return FileResponse(path, media_type="image/jpeg")
+        crop = job.live_crops.get(track_id)
+        if crop is not None and crop.size:
+            ok, encoded = cv2.imencode(".jpg", crop)
+            if ok:
+                return Response(encoded.tobytes(), media_type="image/jpeg")
+        raise HTTPException(status_code=404, detail="Không có ảnh biển số")
 
     @app.post("/api/video/{job_id}/score")
     async def video_score(job_id: str, request: Request) -> dict[str, Any]:

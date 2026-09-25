@@ -196,7 +196,9 @@ To test detection plus OCR together, run
 and open http://127.0.0.1:8081 (needs `uv sync --extra web --extra paddle --extra vision`).
 The **Image** tab reads one full photo. The **Video** tab tracks each vehicle through an uploaded
 video, votes on its plate, lists one result per vehicle, and scores them against a pasted list of
-the true plates (exact accuracy, CER, misread/missed). Each run is kept under
+the true plates (exact accuracy, CER, misread/missed). While it runs, the page shows each
+processed frame with the YOLO boxes and each vehicle's plate crop; a start/duration setting
+limits the run to one segment, and **Stop** ends it early while keeping what was processed. Each run is kept under
 `outputs/video-jobs/<job_id>/` (annotated WebM, plate crops, `report.json`, `score.json`).
 On CPU expect roughly 0.6 s per frame; `--imgsz 960` or `1280` helps with small, distant plates
 at extra cost.

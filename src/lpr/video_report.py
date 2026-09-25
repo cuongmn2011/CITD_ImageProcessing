@@ -50,9 +50,11 @@ class VideoReport:
     frames_processed: int
     output_path: Path
     tracks: tuple[TrackSummary, ...]
+    stopped: bool = False
 
 
 ProgressCallback = Callable[[int, int, list[TrackSummary]], None]
+FrameCallback = Callable[[np.ndarray, int], None]
 
 
 class _TrackAggregator:
@@ -125,15 +127,24 @@ def process_video(
     output_path: str | Path,
     *,
     stride: int = 1,
+    start_seconds: float = 0.0,
+    duration_seconds: float | None = None,
     on_progress: ProgressCallback | None = None,
+    on_frame: FrameCallback | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> VideoReport:
     """Track and read plates across a video, writing an annotated copy.
 
     Only every ``stride``-th frame is processed and written, so the output plays at
     ``fps / stride``. Fast vehicles appear in few frames; a large stride can skip them.
+    ``start_seconds``/``duration_seconds`` limit the run to one segment; timestamps in
+    the report stay relative to the start of the source video. ``on_frame`` receives each
+    annotated frame; ``should_stop`` ends the run early and still returns what was processed.
     """
     if stride < 1:
         raise ValueError("stride must be at least 1")
+    if start_seconds < 0 or (duration_seconds is not None and duration_seconds <= 0):
+        raise ValueError("start_seconds must be >= 0 and duration_seconds > 0")
     capture = cv2.VideoCapture(str(input_path))
     if not capture.isOpened():
         capture.release()
@@ -146,7 +157,21 @@ def process_video(
     fps = float(capture.get(cv2.CAP_PROP_FPS))
     if not np.isfinite(fps) or fps <= 0:
         fps = 25.0
-    frames_total = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
+    source_frames = max(0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT)))
+    start_frame = int(round(start_seconds * fps))
+    if source_frames and start_frame >= source_frames:
+        capture.release()
+        raise ValueError("start_seconds is past the end of the video")
+    end_frame = (
+        start_frame + max(1, int(round(duration_seconds * fps)))
+        if duration_seconds is not None
+        else None
+    )
+    if source_frames:
+        end_frame = min(end_frame, source_frames) if end_frame is not None else source_frames
+    frames_total = end_frame - start_frame if end_frame is not None else 0
+    if start_frame:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -162,31 +187,41 @@ def process_video(
     def crop(frame: np.ndarray, detection: Any) -> np.ndarray:
         return recognizer.detector.crop(frame, detection, padding=recognizer.crop_padding)
 
-    frame_index = 0
+    frame_index = start_frame
     processed = 0
+    stopped = False
     try:
-        while True:
+        while end_frame is None or frame_index < end_frame:
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
             ok, frame = capture.read()
             if not ok:
                 break
-            if frame_index % stride == 0:
+            if (frame_index - start_frame) % stride == 0:
                 time_ms = frame_index / fps * 1000.0
                 result = recognizer.process_frame(frame, frame_index, time_ms)
                 aggregator.update(frame, frame_index, time_ms, result, crop)
                 recognitions = [plate.recognition for plate in result.plates]
-                writer.write(annotate_image(frame, recognitions))
+                annotated = annotate_image(frame, recognitions)
+                writer.write(annotated)
                 processed += 1
+                if on_frame is not None:
+                    on_frame(annotated, frame_index)
                 if on_progress is not None:
-                    on_progress(frame_index + 1, frames_total, aggregator.summaries())
+                    on_progress(
+                        frame_index + 1 - start_frame, frames_total, aggregator.summaries()
+                    )
             frame_index += 1
     finally:
         capture.release()
         writer.release()
     return VideoReport(
-        frames_total=frames_total or frame_index,
+        frames_total=frames_total or frame_index - start_frame,
         frames_processed=processed,
         output_path=destination,
         tracks=tuple(aggregator.summaries()),
+        stopped=stopped,
     )
 
 
