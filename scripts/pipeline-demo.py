@@ -87,8 +87,8 @@ PAGE = """<!doctype html>
     </label>
     <label>Tiền xử lý:
       <select id="variants">
-        <option value="otsu">otsu (mặc định)</option>
-        <option value="raw">raw (ảnh màu gốc)</option>
+        <option value="raw" selected>raw (ảnh màu gốc, nên dùng)</option>
+        <option value="otsu">otsu</option>
         <option value="raw,otsu">raw + otsu</option>
       </select>
     </label>
@@ -99,8 +99,10 @@ PAGE = """<!doctype html>
     <label>Chỉ xử lý (giây, 0 = đến hết video): <input id="duration" type="number" min="0"
       step="1" value="60" style="width:5rem"></label>
   </p>
-  <p class="muted">Xe chạy nhanh chỉ xuất hiện trong ít frame, bỏ bớt frame nhiều dễ sót xe.
-    Trên CPU khoảng 0,6 giây mỗi frame: 60 giây video 30fps mất khoảng 18 phút.</p>
+  <p class="muted">Đo trên CPU với video đường phố 30fps: xử lý mọi frame mất khoảng 10 giây cho
+    mỗi giây video (60 giây ≈ 10 phút); bỏ bớt 3 frame chỉ mất khoảng 4,5 giây (60 giây ≈ 4,5
+    phút) và vẫn thấy đủ xe, nhưng biển khó dễ đọc sai hơn.
+    otsu đọc sai nhiều biển xe máy 2 dòng.</p>
   <div id="video-drop" class="drop">Kéo thả video vào đây hoặc bấm để chọn
     <input id="video-file" type="file" accept="video/*" hidden>
   </div>
@@ -574,7 +576,7 @@ def create_app(
     async def upload_video(
         request: Request,
         stride: int = 1,
-        variants: str = "otsu",
+        variants: str = "raw",
         filename: str = "video.mp4",
         start: float = 0.0,
         duration: float = 0.0,
