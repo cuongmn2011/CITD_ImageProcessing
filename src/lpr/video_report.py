@@ -149,21 +149,22 @@ def _best_reading(members: list[TrackSummary], stable_votes: int) -> tuple[str, 
 
     A fragment's own lock-in does not count: a vehicle split into short fragments gets a
     read or two per fragment, too few for any fragment to lock in, and a lone longer
-    fragment could otherwise outvote them with a misread. Ties go to the reading shown
-    for more frames, then to OCR confidence.
+    fragment could otherwise outvote them with a misread. Ties go to the more confident
+    reading, then to the one shown for more frames; frames shown come last because a
+    track keeps showing whatever it locked in first.
     """
     votes, vote_confidence = _pooled_votes(members)
-    support = {text: (count, 0, vote_confidence[text]) for text, count in votes.items()}
+    support = {text: (count, vote_confidence[text], 0) for text, count in votes.items()}
     for member in members:
         if member.text:
-            count, frames, confidence = support.get(member.text, (0, 0, 0.0))
+            count, confidence, frames = support.get(member.text, (0, 0.0, 0))
             support[member.text] = (
-                count, frames + member.frames_seen, max(confidence, member.ocr_confidence)
+                count, max(confidence, member.ocr_confidence), frames + member.frames_seen
             )
     if not support:
         return "", False, 0.0
     text = max(support, key=support.__getitem__)
-    count, _, confidence = support[text]
+    count, confidence, _ = support[text]
     return text, count >= stable_votes, confidence
 
 

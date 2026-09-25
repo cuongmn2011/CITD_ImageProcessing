@@ -101,6 +101,10 @@ class RealtimePlateRecognizer:
     def reset(self) -> None:
         """Forget tracker-side OCR state at the beginning of a new session."""
         self._tracks.clear()
+        # A detector that tracks in-process (CentroidTrackingDetector) restarts its ids too.
+        reset_tracker = getattr(self.detector, "reset", None)
+        if callable(reset_tracker):
+            reset_tracker()
 
     def process_frame(
         self,

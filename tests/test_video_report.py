@@ -253,6 +253,17 @@ def test_merge_votes_over_all_reads_rather_than_one_locked_fragment() -> None:
     assert [(vehicle.text, vehicle.stable) for vehicle in vehicles] == [("24C09238", True)]
 
 
+def test_merge_breaks_a_tied_vote_by_confidence_not_by_frames_shown() -> None:
+    # One continuous track locked in on 24G09238 early and showed it for 40 frames; later,
+    # closer reads said 24C09238 as often and more confidently.
+    fragments = [
+        _fragment(12, 0, 39, "24G09238", stable=True, votes=3, confidence=0.9),
+        _fragment(20, 41, 44, "24C09238", votes=3, confidence=0.98),
+    ]
+
+    assert [vehicle.text for vehicle in merge_fragments(fragments)] == ["24C09238"]
+
+
 def test_merge_keeps_distinct_vehicles_apart() -> None:
     # Readings from a real run: six vehicles, 0.2 s apart, some read as short noise.
     readings = ["3T4073", "51F22029", "605140494", "6", "86", "676103786"]

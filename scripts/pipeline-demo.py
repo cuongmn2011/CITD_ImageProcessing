@@ -706,6 +706,12 @@ def main() -> None:
         help="PaddleOCR text detector; PP-OCRv5_server_det (PaddleOCR's default) was about "
         "twice as slow on CPU without reading better on the labelled test plates",
     )
+    parser.add_argument(
+        "--tracker",
+        choices=("centroid", "bytetrack"),
+        default="centroid",
+        help="Video mode tracker; ByteTrack dropped small, fast plates (see lpr.tracking)",
+    )
     parser.add_argument("--confidence", type=float, default=0.4)
     parser.add_argument(
         "--imgsz",
@@ -727,6 +733,7 @@ def main() -> None:
     from lpr.pipeline import LicensePlateRecognizer
     from lpr.server import resolve_model_path
     from lpr.stream import RealtimePlateRecognizer
+    from lpr.tracking import CentroidTrackingDetector
 
     model_path = resolve_model_path(args.model)
 
@@ -740,7 +747,15 @@ def main() -> None:
 
     def make_video_recognizer(variants: tuple[str, ...]) -> RealtimePlateRecognizer:
         # A fresh detector per video: Ultralytics' track(persist=True) keeps tracker state.
-        return RealtimePlateRecognizer(make_detector(), [backend], variants=variants)
+        detector = make_detector()
+        if args.tracker == "centroid":
+            detector = CentroidTrackingDetector(detector)
+        # The report votes over every read, so keep reading after a track locks in: one
+        # street-video read was right about 43% of the time, and on a 30 s clip this added
+        # about 5% run time.
+        return RealtimePlateRecognizer(
+            detector, [backend], variants=variants, ocr_refresh_frames=3
+        )
 
     app = create_app(recognizer, make_video_recognizer, args.jobs_dir)
     uvicorn.run(app, host=args.host, port=args.port)
