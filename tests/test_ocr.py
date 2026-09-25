@@ -96,6 +96,24 @@ def test_paddleocr_backend_forwards_model_name_from_inference_yml(monkeypatch, t
     assert calls["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
 
 
+def test_paddleocr_backend_expands_grayscale_to_three_channels(monkeypatch) -> None:
+    seen_shapes: list[tuple[int, ...]] = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            pass
+
+        def predict(self, image):
+            seen_shapes.append(image.shape)
+            return [{"rec_texts": ["51G48154"], "rec_scores": [0.9]}]
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    result = PaddleOCRBackend().recognize(np.zeros((12, 40), dtype=np.uint8))
+
+    assert seen_shapes == [(12, 40, 3)]
+    assert result.text == "51G48154"
+
+
 def test_paddleocr_backend_omits_rec_model_dir_by_default(monkeypatch) -> None:
     calls: dict[str, object] = {}
 

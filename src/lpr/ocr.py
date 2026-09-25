@@ -160,6 +160,10 @@ class PaddleOCRBackend:
 
     def recognize(self, image: np.ndarray) -> OCRResult:
         _validate_image(image)
+        if image.ndim == 2:
+            # Grayscale preprocessing variants (otsu, clahe, ...) are 2-D, but PaddleOCR's
+            # text detector unpacks an (H, W, C) shape and crashes on them.
+            image = np.repeat(image[:, :, None], 3, axis=2)
         prediction = next(iter(self._ocr.predict(image)), None)
         if prediction is None:
             return OCRResult("", 0.0, self.name)
