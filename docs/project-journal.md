@@ -159,6 +159,41 @@ shared the CPU, so absolute times are inflated; the ratios are comparable.
 - Whole 30 s run: 391 s before these two changes, 343 s after; the demo server was also running
   during the start of the second run, so the gain is not measured cleanly.
 
+### Street video: centroid tracker instead of ByteTrack (2026-09-26)
+
+Same 30 s clip and settings as above (mobile text detector, output capped at 1280 px).
+
+- **Why ByteTrack dropped plates.** Ultralytics' ByteTrack multiplies box overlap by detection
+  confidence (`fuse_score: True`) and confirms a new track only when that reaches 0.3. Raw YOLO
+  boxes for the `24X1 124.42` motorbike, frames 122-144: overlap with the previous frame
+  0.35-0.54 at confidence 0.47-0.72, product 0.17-0.29 on every normal frame; the product
+  passed only on repeated frames (overlap 1.0), which is exactly where its fragments started.
+- **Plate motion in plate widths**, same frames: the same plate moved 0.1-0.8 widths per frame
+  (the most right after a repeated frame); plates of different vehicles were 5+ widths apart.
+  `lpr.tracking.CentroidTracker` matches a track's velocity-predicted centre to detections
+  within 1.5 widths and at most 2x size change, and ids a new plate on its first frame.
+- **Reads per vehicle.** The report now keeps reading every 3 frames after a track locks in, and
+  a tied vote goes to the more confident reading instead of the one shown longer.
+
+| Run (30 s, CPU) | Tracks | Rows | Time | `24A07816` | `29K10425` | `24C09238` | Motorbike `24X1 124.42` |
+|---|---:|---:|---:|---|---|---|---|
+| ByteTrack, stride 1 | 52 | 20 | 343 s | 15 of 16 reads | 7 of 14 | 6 of 8 | 3 frames, read `24X112452` |
+| ByteTrack, stride 3 | 4 | 3 | 126 s | missed | 5 of 8 | missed | missed |
+| Centroid, stride 1 | 19 | 15 | 305 s | 34 of 35 | 25 of 35 | 8 of 15 | 51 frames, read `24X112442` |
+| Centroid, stride 3 | 20 | 13 | 136 s | 33 of 33 | 29 of 34 | **7 of 15, read `24G09238`** | 14 frames, read `24X112452` |
+
+- Both ByteTrack rows still read only every 12 frames after lock-in. At centroid stride 1 the
+  extra reads cost nothing measurable: 306 s with the old interval, 305 s with the new one.
+- The `24C09238` pickup is a coin flip for this OCR model: its reads split about evenly between
+  `24C09238` and `24G09238` in both centroid runs. Not a tracking problem.
+- **One read is right about 43% of the time on street plates**: 39 of 91 crops of the three
+  plates above (mean crop height 46 px), against 8 of 18 on the labelled slideshow (120 px).
+  Correct plates come from voting over many reads. Crops are upscaled to 64 px high before OCR;
+  reading them at detected size instead gave the same 39/91 (CER 0.168 vs 0.170) and 7/18 vs
+  8/18, so preprocessing was left unchanged.
+- Adopted in `scripts/pipeline-demo.py` only: `--tracker centroid` (default; `bytetrack` still
+  available) and reads every 3 frames in video mode. `lpr serve` still uses ByteTrack.
+
 
 ## 5. What is not yet claimed
 
