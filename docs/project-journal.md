@@ -231,6 +231,25 @@ lock-in, output capped at 1280 px (all as above). CPU: i7-1185G7, no CUDA/GPU. E
   point at it without breaking a fresh checkout; this is one clip's worth of evidence, not
   grounds to also change the CLI's or `lpr serve`'s defaults.
 
+### Docker packaging attempt, reverted (2026-09-26)
+
+Goal: run `scripts/pipeline-demo.py` identically from a container on Windows or macOS hosts.
+Added, then removed, `Dockerfile`, `docker-compose.yml`, `.dockerignore`.
+
+- `docker build` completed successfully: all dependencies (torch, paddlepaddle, ultralytics,
+  fastapi, dev tools) installed and the image was tagged. Took about 27 minutes on this
+  machine, dominated by downloading/installing torch and paddlepaddle.
+- **Never verified further.** Mid-session the host's C: drive hit 8.9 GB free out of 399 GB;
+  `AppData\Local\Docker` (Docker Desktop's own VM disk) alone was 178 GB, accumulated from
+  unrelated past projects, not this one. Docker Desktop's backend then stopped responding and
+  its named pipe disappeared - it had crashed. Starting the container and reaching the page
+  over HTTP was never tried.
+- Root cause is host disk space, not the Dockerfile; the image itself built cleanly. Given
+  Docker Desktop was down and the fix (freeing host disk, possibly compacting its 178 GB VM
+  disk) is outside this project, the Docker files were removed rather than left unverified in
+  the repo. `uv run python scripts/pipeline-demo.py` (or `docker compose` again from this
+  entry, if someone re-adds the same three files) remains the way to run it.
+
 
 ## 5. What is not yet claimed
 
