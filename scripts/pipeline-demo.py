@@ -87,9 +87,9 @@ PAGE = """<!doctype html>
 
 <section id="video-section" hidden>
   <p>Chọn file video: video của bạn phát ngay, có khung khoanh biển số đè lên. Máy xử lý
-    chậm hơn video thật nhiều lần, nên video sẽ tự dừng ngắn mỗi khi phát tới chỗ chưa xử
-    lý xong, rồi tự chạy tiếp khi có dữ liệu - để khung luôn khoanh đúng chỗ đang chiếu.
-    Biển số hiện dần bên phải khi đọc xong.</p>
+    chậm hơn video thật nhiều lần, nên video không bao giờ đứng khựng nhưng sẽ tự chạy chậm
+    lại gần chỗ chưa xử lý xong, rồi tự nhanh lại khi có dữ liệu - để khung luôn khoanh đúng
+    chỗ đang chiếu. Biển số hiện dần bên phải khi đọc xong.</p>
   <p>
     <label>Bỏ bớt frame:
       <select id="stride">
@@ -268,32 +268,33 @@ const OVERLAY_MAX_AGE_MS = 700;
 // How far the source video has actually been analyzed, and whether more is still coming.
 let frontierMs = 0;
 let jobRunning = false;
-let waitingForData = false;
 
 // Background processing runs far slower than the video's own real-time playback (about
-// 10x on a typical CPU), so unthrottled playback would race far ahead of what has been
-// analyzed and the overlay would have nothing to draw. Pausing at the processed edge and
-// resuming once more of the video has been analyzed keeps the box synced to what is
-// actually on screen, at the cost of no longer playing at a smooth, constant pace.
+// 10-15x on a typical CPU, measured), so unthrottled playback would race far ahead of what
+// has been analyzed and the overlay would have nothing to draw for "now". Rather than
+// pausing outright at the processed edge, ease the playback rate down as it approaches that
+// edge and back up to normal once there is runway again: the video keeps moving (never
+// freezes), but self-regulates to roughly the pace of the background job, which near the
+// edge - most of the time, since processing lags this much - means a near-crawl, not a
+// normal pace. There is no way around that tradeoff without processing at least as fast as
+// the video plays; see docs/project-journal.md for the measured per-stage costs.
+const RATE_RAMP_MS = 1000; // start easing down within this much runway of the processed edge
+const MIN_RATE = 0.08;
+
 function throttlePlayback() {
   const video = $("video-result");
-  if (video.hidden) return;
+  // Never pauses the video itself - only adjusts its rate - so a pause here is the user's
+  // own doing (via the native controls); leave it alone rather than fighting it.
+  if (video.hidden || video.paused) return;
   if (!jobRunning) {
-    if (waitingForData) {
-      waitingForData = false;
-      video.play().catch(() => {});
-    }
+    if (video.playbackRate !== 1) video.playbackRate = 1;
     return;
   }
-  const nowMs = video.currentTime * 1000;
-  const guardMs = 150; // small cushion so it does not stutter right at the processed edge
-  if (!video.paused && nowMs >= frontierMs - guardMs) {
-    video.pause();
-    waitingForData = true;
-  } else if (waitingForData && nowMs < frontierMs - guardMs) {
-    waitingForData = false;
-    video.play().catch(() => {});
-  }
+  const aheadMs = frontierMs - video.currentTime * 1000; // unprocessed-safe runway left
+  const rate = aheadMs >= RATE_RAMP_MS
+    ? 1
+    : Math.max(MIN_RATE, MIN_RATE + (1 - MIN_RATE) * (aheadMs / RATE_RAMP_MS));
+  if (Math.abs(video.playbackRate - rate) > 0.01) video.playbackRate = rate;
 }
 
 function boxesAt(nowMs) {
@@ -355,7 +356,9 @@ async function pollJob(jobId) {
     const count = `${stableCount}/${job.tracks.length} xe đã chốt`;
     renderTracks(jobId, job.tracks);
     if (job.state === "running") {
-      const behind = waitingForData ? " · video tạm dừng, chờ xử lý kịp" : "";
+      const rate = $("video-result").playbackRate;
+      const behind = rate < 0.99 ? ` · video phát chậm lại (${rate.toFixed(2)}x), chờ xử lý kịp`
+        : "";
       status.textContent = `Đang đọc biển số nền: frame ${job.frames_done}/${total || "?"}` +
         ` · ${count}${behind}`;
       $("stop-button").hidden = false;
@@ -412,7 +415,6 @@ async function sendVideo(file) {
   detectionsCursor = 0;
   frontierMs = 0;
   jobRunning = true;
-  waitingForData = false;
   const startSeconds = Number($("start").value) || 0;
   playLocally(file, startSeconds);
   status.textContent = "Video đang phát bình thường; đang tải lên để đọc biển số nền...";
