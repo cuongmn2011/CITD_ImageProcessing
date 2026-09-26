@@ -117,6 +117,28 @@ def test_process_video_scales_the_annotated_copy_down(tmp_path) -> None:
     assert report.tracks[0].crop.shape[:2] == (15, 35)
 
 
+def test_process_video_reports_raw_boxes_per_frame_via_on_plates(tmp_path) -> None:
+    source = tmp_path / "in.mp4"
+    _write_video(source)
+    seen: list[tuple[int, float, tuple]] = []
+
+    process_video(
+        _recognizer(),
+        source,
+        tmp_path / "out.mp4",
+        on_plates=lambda frame_index, time_ms, result: seen.append(
+            (frame_index, time_ms, result.plates)
+        ),
+    )
+
+    assert [frame_index for frame_index, _, _ in seen] == list(range(10))
+    assert [time_ms for _, time_ms, _ in seen] == [index * 100.0 for index in range(10)]
+    # Each frame carries the raw box for that frame, before it is drawn into the video.
+    assert all(len(plates) == 1 for _, _, plates in seen)
+    assert seen[0][2][0].recognition.detection.bbox == (5, 5, 40, 20)
+    assert seen[0][2][0].track_id == 7
+
+
 def test_process_video_rejects_invalid_stride(tmp_path) -> None:
     with pytest.raises(ValueError, match="stride"):
         process_video(_recognizer(), tmp_path / "in.mp4", tmp_path / "out.mp4", stride=0)

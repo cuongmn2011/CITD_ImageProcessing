@@ -32,6 +32,7 @@ MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 LIVE_FRAME_WIDTH = 960
 MAX_VIDEO_BYTES = 500 * 1024 * 1024
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
+MAX_DETECTIONS = 50_000  # bound job.detections' memory on a long unattended run
 
 PAGE = """<!doctype html>
 <html lang="vi">
@@ -49,7 +50,10 @@ PAGE = """<!doctype html>
   img.result, video { max-width: 100%; margin-top: 1rem; border: 1px solid #ccc; }
   .video-live { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
   .video-live .video-frame { flex: 2; min-width: 280px; }
-  .video-live .video-frame img.result, .video-live .video-frame video { margin-top: 0; }
+  .video-wrap { position: relative; display: inline-block; max-width: 100%; }
+  .video-wrap video { display: block; max-width: 100%; margin-top: 0; }
+  .video-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+                        pointer-events: none; }
   #track-table { flex: 1; width: auto; min-width: 220px; margin-top: 0; }
   .plate { font-size: 1.5rem; font-weight: 700; letter-spacing: .08em; padding: .5rem 0;
            border-bottom: 1px solid #ddd; }
@@ -116,7 +120,10 @@ PAGE = """<!doctype html>
   <button id="stop-button" hidden>Dừng (giữ kết quả đã xử lý)</button>
   <div class="video-live">
     <div class="video-frame">
-      <video id="video-result" controls hidden></video>
+      <div class="video-wrap">
+        <video id="video-result" controls hidden></video>
+        <canvas id="video-overlay" hidden></canvas>
+      </div>
     </div>
     <table id="track-table" hidden>
       <thead><tr><th>Ảnh biển</th><th>Biển số đã chốt</th><th>Thời điểm</th></tr></thead>
@@ -236,11 +243,73 @@ function renderTracks(jobId, tracks) {
 
 let currentJob = null;
 
+let overlayDetections = [];
+let detectionsCursor = 0;
+
+async function fetchDetections(jobId) {
+  try {
+    const payload = await readJson(
+      await fetch(`/api/video/${jobId}/detections?since=${detectionsCursor}`)
+    );
+    overlayDetections.push(...payload.detections);
+    detectionsCursor = payload.count;
+  } catch (error) {
+    // The overlay is a bonus; a transient failure here should not stop the rest of polling.
+  }
+}
+
+// The box for a track stays on screen until a newer read arrives or this much time has
+// passed, so a plate does not visibly freeze in place once the track stops being sampled.
+const OVERLAY_MAX_AGE_MS = 700;
+
+function boxesAt(nowMs) {
+  const latest = new Map();
+  for (const detection of overlayDetections) {
+    if (detection.time_ms > nowMs || nowMs - detection.time_ms > OVERLAY_MAX_AGE_MS) continue;
+    const current = latest.get(detection.track_id);
+    if (!current || detection.time_ms > current.time_ms) latest.set(detection.track_id, detection);
+  }
+  return [...latest.values()];
+}
+
+function drawOverlay() {
+  const video = $("video-result");
+  const canvas = $("video-overlay");
+  if (!video.hidden && video.videoWidth) {
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const fontSize = Math.max(16, canvas.width / 70);
+    ctx.lineWidth = Math.max(2, canvas.width / 500);
+    ctx.strokeStyle = "#22c55e";
+    ctx.font = `${fontSize}px sans-serif`;
+    ctx.textBaseline = "bottom";
+    for (const detection of boxesAt(video.currentTime * 1000)) {
+      const [x1, y1, x2, y2] = detection.bbox;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      const label = detection.text || "…";
+      const labelWidth = ctx.measureText(label).width + 8;
+      const labelHeight = fontSize + 6;
+      const labelTop = Math.max(0, y1 - labelHeight);
+      ctx.fillStyle = "#22c55e";
+      ctx.fillRect(x1, labelTop, labelWidth, labelHeight);
+      ctx.fillStyle = "#052e16";
+      ctx.fillText(label, x1 + 4, labelTop + labelHeight);
+    }
+  }
+  requestAnimationFrame(drawOverlay);
+}
+requestAnimationFrame(drawOverlay);
+
 async function pollJob(jobId) {
   const status = $("video-status");
   const progress = $("video-progress");
   try {
     const job = await readJson(await fetch(`/api/video/${jobId}`));
+    await fetchDetections(jobId);
     const total = job.frames_total || 0;
     progress.hidden = false;
     progress.max = total || 1;
@@ -286,6 +355,7 @@ function playLocally(file, startSeconds) {
   const preview = $("video-result");
   preview.src = previewUrl;
   preview.hidden = false;
+  $("video-overlay").hidden = false;
   preview.muted = true; // autoplay is usually blocked with sound; controls stay enabled
   if (startSeconds > 0) {
     preview.addEventListener("loadedmetadata", () => { preview.currentTime = startSeconds; },
@@ -300,6 +370,8 @@ async function sendVideo(file) {
   $("score-box").hidden = true;
   $("score-result").textContent = "";
   $("track-table").hidden = true;
+  overlayDetections = [];
+  detectionsCursor = 0;
   const startSeconds = Number($("start").value) || 0;
   playLocally(file, startSeconds);
   status.textContent = "Video đang phát bình thường; đang tải lên để đọc biển số nền...";
@@ -401,6 +473,10 @@ class _VideoJob:
     latest_frame: bytes | None = None
     frame_seq: int = 0
     live_crops: dict[int, np.ndarray] = field(default_factory=dict)
+    # Raw per-frame boxes for the client to draw over its own local copy of the video,
+    # keyed by nothing (append-only); not persisted, and not part of to_dict()/report.json,
+    # same as latest_frame/live_crops - it would make that file huge for a long video.
+    detections: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -534,6 +610,24 @@ def create_app(
                 job.latest_frame = encoded.tobytes()
                 job.frame_seq += 1
 
+        def on_plates(frame_index: int, time_ms: float, result: Any) -> None:
+            # Raw boxes for the client's own overlay, drawn over its local copy of the
+            # video; cheap to collect since detection already ran for on_progress above.
+            for plate in result.plates:
+                if plate.track_id is None:
+                    continue
+                job.detections.append(
+                    {
+                        "time_ms": time_ms,
+                        "track_id": plate.track_id,
+                        "bbox": list(plate.recognition.detection.bbox),
+                        "text": plate.recognition.ocr.text if plate.recognition.ocr else "",
+                        "stable": plate.stable,
+                    }
+                )
+            if len(job.detections) > MAX_DETECTIONS:
+                del job.detections[: len(job.detections) - MAX_DETECTIONS]
+
         try:
             with image_lock:
                 video_recognizer = make_video_recognizer(job.variants)
@@ -546,6 +640,7 @@ def create_app(
                     duration_seconds=job.duration_seconds,
                     on_progress=on_progress,
                     on_frame=on_frame,
+                    on_plates=on_plates,
                     should_stop=lambda: job.stop_requested,
                 )
             crops_dir = job.directory / "crops"
@@ -664,6 +759,13 @@ def create_app(
         if job.state == "running":
             job.stop_requested = True
         return {"state": job.state}
+
+    @app.get("/api/video/{job_id}/detections")
+    def video_detections(job_id: str, since: int = 0) -> dict[str, Any]:
+        """Boxes found from index ``since`` onward, for the client's overlay to catch up."""
+        job = get_job(job_id)
+        since = max(0, since)
+        return {"detections": job.detections[since:], "count": len(job.detections)}
 
     @app.get("/api/video/{job_id}/crop/{track_id}.jpg")
     def video_crop(job_id: str, track_id: int) -> Response:

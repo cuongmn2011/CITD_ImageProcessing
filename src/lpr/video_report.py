@@ -70,6 +70,7 @@ class VideoReport:
 
 ProgressCallback = Callable[[int, int, list[TrackSummary]], None]
 FrameCallback = Callable[[np.ndarray, int], None]
+PlatesCallback = Callable[[int, float, FrameResult], None]
 
 
 class _TrackAggregator:
@@ -264,6 +265,7 @@ def process_video(
     duration_seconds: float | None = None,
     on_progress: ProgressCallback | None = None,
     on_frame: FrameCallback | None = None,
+    on_plates: PlatesCallback | None = None,
     should_stop: Callable[[], bool] | None = None,
     max_output_width: int | None = 1280,
 ) -> VideoReport:
@@ -273,11 +275,14 @@ def process_video(
     ``fps / stride``. Fast vehicles appear in few frames; a large stride can skip them.
     ``start_seconds``/``duration_seconds`` limit the run to one segment; timestamps in
     the report stay relative to the start of the source video. ``on_frame`` receives each
-    annotated frame; ``should_stop`` ends the run early and still returns what was processed.
-    Tracks split off one vehicle are joined by ``merge_fragments``, both in the progress
-    callback and in the report. Recognition always runs on full-size frames; the annotated
-    copy is scaled down to ``max_output_width`` (``None`` keeps it full size), because
-    encoding 1080p WebM cost about as much per frame as plate detection.
+    annotated frame; ``on_plates`` receives each frame's raw boxes (frame index, timestamp,
+    the frame's ``FrameResult``) before they are baked into that frame's pixels, for a
+    caller that draws its own overlay instead of using the annotated video. ``should_stop``
+    ends the run early and still returns what was processed. Tracks split off one vehicle
+    are joined by ``merge_fragments``, both in the progress callback and in the report.
+    Recognition always runs on full-size frames; the annotated copy is scaled down to
+    ``max_output_width`` (``None`` keeps it full size), because encoding 1080p WebM cost
+    about as much per frame as plate detection.
     """
     if stride < 1:
         raise ValueError("stride must be at least 1")
@@ -348,6 +353,8 @@ def process_video(
                 time_ms = frame_index / fps * 1000.0
                 result = recognizer.process_frame(frame, frame_index, time_ms)
                 aggregator.update(frame, frame_index, time_ms, result, crop)
+                if on_plates is not None:
+                    on_plates(frame_index, time_ms, result)
                 recognitions = [plate.recognition for plate in result.plates]
                 annotated = annotate_image(frame, recognitions)
                 if output_size != (width, height):

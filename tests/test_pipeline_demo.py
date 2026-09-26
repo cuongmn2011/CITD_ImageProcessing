@@ -127,6 +127,13 @@ def test_video_job_reports_tracks_and_scores(tmp_path) -> None:
     crop = client.get(f"/api/video/{job_id}/crop/3.jpg")
     assert crop.status_code == 200 and crop.headers["content-type"] == "image/jpeg"
 
+    detections = client.get(f"/api/video/{job_id}/detections").json()
+    assert detections["count"] == 8  # one tracked box per processed frame
+    assert {item["track_id"] for item in detections["detections"]} == {3}
+    assert all(len(item["bbox"]) == 4 for item in detections["detections"])
+    caught_up = client.get(f"/api/video/{job_id}/detections?since={detections['count']}").json()
+    assert caught_up == {"detections": [], "count": 8}
+
     score = client.post(
         f"/api/video/{job_id}/score", json={"truths": "51G-481.54\n30A11111"}
     ).json()
