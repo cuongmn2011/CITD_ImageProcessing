@@ -95,7 +95,7 @@ PAGE = """<!doctype html>
       <select id="stride">
         <option value="1">1 (xử lý mọi frame)</option>
         <option value="2">2</option>
-        <option value="3">3</option>
+        <option value="3" selected>3 (nên dùng, vẫn thấy đủ xe)</option>
       </select>
     </label>
     <label>Tiền xử lý:
