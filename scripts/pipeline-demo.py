@@ -5,7 +5,7 @@ each vehicle's plate, and scores the result against a list of the true plates.
 
 Run:
   uv run python scripts/pipeline-demo.py \\
-    --model outputs/citd-yolo11s-training.zip \\
+    --model model/citd-yolo11s-training.zip \\
     --rec-model-dir model/ocr-rec-training-merged/inference
 Then open http://127.0.0.1:8081.
 """
@@ -883,7 +883,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Local test page for the full LPR pipeline")
     parser.add_argument(
         "--model",
-        default="outputs/citd-yolo11s-training.zip",
+        default="model/citd-yolo11s-training.zip",
         help="YOLO weights (best.pt), a training archive containing one, or an exported-model "
         "directory (e.g. an OpenVINO export from scripts/export-yolo-openvino.py - about 3-4x "
         "faster per frame on CPU here, but its confidence scores run a little low, so pair it "

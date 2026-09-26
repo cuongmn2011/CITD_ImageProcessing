@@ -4,7 +4,7 @@ This converts the already-trained weights to a different runtime format; it does
 retrain anything. Requires the openvino extra: uv sync --extra vision --extra openvino
 
 Run:
-  uv run python scripts/export-yolo-openvino.py --model outputs/citd-yolo11s-training.zip
+  uv run python scripts/export-yolo-openvino.py --model model/citd-yolo11s-training.zip
 Then point YoloPlateDetector / --model at the printed <name>_openvino_model directory.
 """
 
@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--model",
-        default="outputs/citd-yolo11s-training.zip",
+        default="model/citd-yolo11s-training.zip",
         help="YOLO weights (best.pt) or a training archive containing one",
     )
     parser.add_argument(

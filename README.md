@@ -105,7 +105,7 @@ No dataset, model weights, video, or generated training run is committed to Git.
 
 ## OCR training versus detector training
 
-The artifact in `outputs/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
+The artifact in `model/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
 It contains bounding boxes, not plate-text transcripts, so retraining YOLO from this artifact
 cannot teach OCR to read characters. The current validation metrics (`mAP50=0.99495`,
 `mAP50-95=0.72907`) measure detection, not OCR accuracy.
@@ -115,7 +115,7 @@ First diagnose OCR on real crops with a backend that is installed:
 ```bash
 uv run lpr infer-image \
   --image path/to/car.jpg \
-  --model outputs/.lpr-model/best.pt \
+  --model model/.lpr-model/best.pt \
   --ocr easyocr \
   --variants raw,gray,otsu,adaptive,clahe
 ```
@@ -126,7 +126,7 @@ after the dataset cache is available:
 ```bash
 export ROBOFLOW_API_KEY="<your-key>"
 uv run --extra vision --extra dataset python scripts/train-yolo.py \
-  --model outputs/.lpr-model/best.pt \
+  --model model/.lpr-model/best.pt \
   --epochs 100 \
   --imgsz 960 \
   --batch -1 \
@@ -192,7 +192,7 @@ To try the OCR model alone on a cropped plate image, run
 http://127.0.0.1:8080 (needs `uv sync --extra web --extra paddle`).
 
 To test detection plus OCR together, run
-`uv run python scripts/pipeline-demo.py --model outputs/citd-yolo11s-training.zip --rec-model-dir path/to/inference`
+`uv run python scripts/pipeline-demo.py --model model/citd-yolo11s-training.zip --rec-model-dir path/to/inference`
 and open http://127.0.0.1:8081 (needs `uv sync --extra web --extra paddle --extra vision`).
 The **Image** tab reads one full photo. The **Video** tab tracks each vehicle through an uploaded
 video, votes on its plate, lists one result per vehicle, and scores them against a pasted list of

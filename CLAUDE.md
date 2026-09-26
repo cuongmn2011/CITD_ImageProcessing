@@ -36,7 +36,7 @@ Training dataset: Vietnamese Car License Plate Dataset by Cuong Ta on Roboflow (
 
 ## Evidence discipline (important)
 
-Detector validation metrics from a real training run are recorded (mAP50=0.99495, mAP50-95=0.72907 on artifact `outputs/citd-yolo11s-training.zip` / `outputs/.lpr-model/best.pt`), but that artifact contains bounding boxes only — no plate-text transcripts — so retraining it **cannot** improve OCR accuracy. No OCR exact accuracy / character accuracy / CER / end-to-end throughput / backend comparison has been measured yet on a held-out set.
+Detector validation metrics from a real training run are recorded (mAP50=0.99495, mAP50-95=0.72907 on artifact `model/citd-yolo11s-training.zip` / `model/.lpr-model/best.pt`), but that artifact contains bounding boxes only — no plate-text transcripts — so retraining it **cannot** improve OCR accuracy. No OCR exact accuracy / character accuracy / CER / end-to-end throughput / backend comparison has been measured yet on a held-out set.
 
 Do not add invented or placeholder metrics to the README, journal, or final report — only record real command output and generated metric files after an experiment is actually run (see `docs/project-journal.md` section 6 for the protocol). To improve OCR accuracy, the correct levers are backend choice (PaddleOCR/EasyOCR), crop quality/preprocessing variant, and temporal voting — not detector retraining.
 
