@@ -194,6 +194,43 @@ Same 30 s clip and settings as above (mobile text detector, output capped at 128
 - Adopted in `scripts/pipeline-demo.py` only: `--tracker centroid` (default; `bytetrack` still
   available) and reads every 3 frames in video mode. `lpr serve` still uses ByteTrack.
 
+### Street video: YOLO on OpenVINO instead of PyTorch (2026-09-26)
+
+Same 30 s clip; centroid tracker, mobile OCR text detector, reads every 3 frames after
+lock-in, output capped at 1280 px (all as above). CPU: i7-1185G7, no CUDA/GPU. Export:
+`scripts/export-yolo-openvino.py` (`model.export(format="openvino")` on the existing
+`best.pt` - converts the already-trained weights to a different runtime, no retraining).
+
+- **Detection-only speed** (60 street frames, confidence 0.4 both): PyTorch 155-214 ms/frame
+  (varied run to run on this shared machine) vs OpenVINO 49-77 ms/frame - consistently
+  **3-4x faster** per frame.
+- **OpenVINO's confidence scores run low.** Matched via IoU ≥ 0.5 against PyTorch at the same
+  confidence=0.4: of 94 matched detections the mean confidence gap was 0.020 (median 0.016,
+  max 0.072) - small. But 17 PyTorch detections (confidence 0.41-0.535, i.e. near the 0.4
+  cutoff) had no OpenVINO match at all: at the threshold, that small a gap is enough to drop
+  some. Lowering OpenVINO's confidence to 0.35 recovered most of them (17 → 6 missing) at the
+  cost of 5 new low-confidence extra detections.
+- **Full pipeline, same clip, PyTorch conf 0.4 vs OpenVINO conf 0.35:**
+
+  | Run | Time | Vehicles | Motorbike `24X1 124.42` tracked | Other 4 plates |
+  |---|---:|---:|---|---|
+  | stride 3, PyTorch | 165 s | 13 | 14 frames, `24X112452` (1 wrong char) | all correct |
+  | stride 3, OpenVINO | 138 s | 14 | 22 frames, `24X112442` (correct) | all correct |
+  | stride 1, PyTorch | 305 s | 17 | 71 frames (2 fragments), correct | all correct |
+  | stride 1, OpenVINO | **173 s** | 18 | 68 frames (2 fragments), correct | all correct |
+
+  At stride 1 - the accuracy-first setting - OpenVINO is **43% faster end to end** (173 s vs
+  305 s) with matching tracking/reading outcomes; at stride 3 the gain is smaller (17%)
+  because PaddleOCR, not YOLO, dominates the per-frame cost once a plate is already being
+  read. `24C09238` stayed a near-even split between `24C09238`/`24G09238` in every run here -
+  confirmed again as an OCR-model limit, not a detector or tracker effect.
+- **Not adopted as a default.** `resolve_model_path` (`src/lpr/server.py`) now also accepts an
+  exported-model directory, and `scripts/pipeline-demo.py --model`'s help documents pairing it
+  with a lower `--confidence` (e.g. 0.35). The export only exists after a user runs the export
+  script locally (gitignored under `outputs/`), so the script's *default* model path could not
+  point at it without breaking a fresh checkout; this is one clip's worth of evidence, not
+  grounds to also change the CLI's or `lpr serve`'s defaults.
+
 
 ## 5. What is not yet claimed
 
