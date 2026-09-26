@@ -913,7 +913,10 @@ def main() -> None:
         default=640,
         help="YOLO input size; try 960 or 1280 for small, distant street-camera plates",
     )
-    parser.add_argument("--device", default=None, help="YOLO device, for example 0 or cpu")
+    parser.add_argument(
+        "--device", default=None, help="YOLO device, for example 0 (CUDA), mps (Apple Silicon) "
+        "or cpu"
+    )
     parser.add_argument("--jobs-dir", type=Path, default=Path("outputs/video-jobs"))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)

@@ -85,7 +85,10 @@ def _add_pipeline_arguments(parser: argparse.ArgumentParser) -> None:
         help="Comma-separated preprocessing variants",
     )
     parser.add_argument("--padding", type=_unit_interval, default=0.08)
-    parser.add_argument("--device", default=None, help="YOLO device, for example 0 or cpu")
+    parser.add_argument(
+        "--device", default=None, help="YOLO device, for example 0 (CUDA), mps (Apple Silicon) "
+        "or cpu"
+    )
     parser.add_argument("--confidence", type=_confidence, default=0.4)
     parser.add_argument("--gpu", action="store_true", help="Use GPU for EasyOCR")
     parser.add_argument(
@@ -127,7 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="paddleocr",
         choices=["tesseract", "easyocr", "paddleocr"],
     )
-    serve.add_argument("--device", default=None)
+    serve.add_argument(
+        "--device", default=None, help="YOLO device, for example 0 (CUDA), mps (Apple Silicon) "
+        "or cpu"
+    )
     serve.add_argument(
         "--rec-model-dir",
         default=None,
