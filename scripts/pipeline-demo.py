@@ -80,7 +80,8 @@ PAGE = """<!doctype html>
 </section>
 
 <section id="video-section" hidden>
-  <p>Chọn file video. Trên CPU, xử lý chậm hơn thời gian thực nhiều lần.</p>
+  <p>Chọn file video: video phát ngay bình thường, việc nhận diện và đọc biển số chạy
+    nền và biển số hiện dần bên phải khi đọc xong.</p>
   <p>
     <label>Bỏ bớt frame:
       <select id="stride">
@@ -103,9 +104,9 @@ PAGE = """<!doctype html>
     <label>Chỉ xử lý (giây, 0 = đến hết video): <input id="duration" type="number" min="0"
       step="1" value="60" style="width:5rem"></label>
   </p>
-  <p class="muted">Đo trên CPU với video đường phố 30fps: xử lý mọi frame mất khoảng 10 giây cho
-    mỗi giây video (60 giây ≈ 10 phút); bỏ bớt 3 frame chỉ mất khoảng 4,5 giây (60 giây ≈ 4,5
-    phút) và vẫn thấy đủ xe, nhưng biển khó dễ đọc sai hơn.
+  <p class="muted">Tốc độ xử lý nền (không ảnh hưởng lúc phát video): đo trên CPU với video
+    đường phố 30fps, xử lý mọi frame mất khoảng 10 giây nền cho mỗi giây video; bỏ bớt 3 frame
+    chỉ mất khoảng 4,5 giây nền và vẫn thấy đủ xe, nhưng biển khó dễ đọc sai hơn.
     otsu đọc sai nhiều biển xe máy 2 dòng.</p>
   <div id="video-drop" class="drop">Kéo thả video vào đây hoặc bấm để chọn
     <input id="video-file" type="file" accept="video/*" hidden>
@@ -115,7 +116,6 @@ PAGE = """<!doctype html>
   <button id="stop-button" hidden>Dừng (giữ kết quả đã xử lý)</button>
   <div class="video-live">
     <div class="video-frame">
-      <img id="live-frame" class="result" hidden alt="frame đang xử lý">
       <video id="video-result" controls hidden></video>
     </div>
     <table id="track-table" hidden>
@@ -124,6 +124,8 @@ PAGE = """<!doctype html>
     </table>
   </div>
   <p id="video-download" hidden></p>
+  <p class="muted">Video ở trên là file gốc bạn chọn, phát bình thường ngay. Video có khung
+    nhận diện chỉ có sau khi xử lý nền xong, tải qua nút bên dưới.</p>
   <div id="score-box" hidden>
     <h3>Chấm điểm</h3>
     <p class="muted">Dán danh sách biển số thật xuất hiện trong video, mỗi dòng một biển.</p>
@@ -233,7 +235,6 @@ function renderTracks(jobId, tracks) {
 }
 
 let currentJob = null;
-let shownFrame = -1;
 
 async function pollJob(jobId) {
   const status = $("video-status");
@@ -248,18 +249,13 @@ async function pollJob(jobId) {
     const count = `${stableCount}/${job.tracks.length} xe đã chốt`;
     renderTracks(jobId, job.tracks);
     if (job.state === "running") {
-      status.textContent = `Đang xử lý frame ${job.frames_done}/${total || "?"} · ${count}`;
-      if (job.frame_seq > 0 && job.frame_seq !== shownFrame) {
-        shownFrame = job.frame_seq;
-        $("live-frame").src = `/api/video/${jobId}/frame.jpg?s=${job.frame_seq}`;
-        $("live-frame").hidden = false;
-      }
+      status.textContent = `Đang đọc biển số nền: frame ${job.frames_done}/${total || "?"}` +
+        ` · ${count}`;
       $("stop-button").hidden = false;
       setTimeout(() => pollJob(jobId), 500);
       return;
     }
     $("stop-button").hidden = true;
-    $("live-frame").hidden = true;
     if (job.state === "error") {
       setError(status, job.error || "không rõ");
       return;
@@ -267,14 +263,10 @@ async function pollJob(jobId) {
     status.textContent = (job.stopped ? "Đã dừng" : "Xong") +
       `: ${job.frames_processed} frame đã xử lý · ${count}`;
     const videoUrl = `/api/video/${jobId}/video`;
-    if (job.output_name.endsWith(".webm")) {
-      $("video-result").src = videoUrl;
-      $("video-result").hidden = false;
-    }
     const link = document.createElement("a");
     link.href = videoUrl;
     link.download = job.output_name;
-    link.textContent = "Tải video kết quả";
+    link.textContent = "Tải video có khung nhận diện";
     $("video-download").textContent = "";
     $("video-download").appendChild(link);
     $("video-download").hidden = false;
@@ -284,21 +276,38 @@ async function pollJob(jobId) {
   }
 }
 
+let previewUrl = null;
+
+function playLocally(file, startSeconds) {
+  // The file is already on this machine, so it plays instantly at normal speed, with no
+  // wait for upload or background processing.
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(file);
+  const preview = $("video-result");
+  preview.src = previewUrl;
+  preview.hidden = false;
+  preview.muted = true; // autoplay is usually blocked with sound; controls stay enabled
+  if (startSeconds > 0) {
+    preview.addEventListener("loadedmetadata", () => { preview.currentTime = startSeconds; },
+      { once: true });
+  }
+  preview.play().catch(() => {}); // user can press play if the browser still blocks it
+}
+
 async function sendVideo(file) {
   const status = $("video-status");
-  $("video-result").hidden = true;
   $("video-download").hidden = true;
   $("score-box").hidden = true;
   $("score-result").textContent = "";
   $("track-table").hidden = true;
-  $("live-frame").hidden = true;
-  shownFrame = -1;
-  status.textContent = "Đang tải video lên...";
+  const startSeconds = Number($("start").value) || 0;
+  playLocally(file, startSeconds);
+  status.textContent = "Video đang phát bình thường; đang tải lên để đọc biển số nền...";
   const params = new URLSearchParams({
     stride: $("stride").value,
     variants: $("variants").value,
     filename: file.name,
-    start: $("start").value || "0",
+    start: String(startSeconds),
     duration: $("duration").value || "0",
   });
   try {
