@@ -297,14 +297,40 @@ function throttlePlayback() {
   if (Math.abs(video.playbackRate - rate) > 0.01) video.playbackRate = rate;
 }
 
+// Detections land roughly every `stride` frames (100ms of video at stride 3, 30fps), far
+// coarser than the video's own 33ms frame spacing: snapping straight to the last-known box
+// would hold it still for up to 100ms then jump, looking like it lags a moving vehicle.
+// Interpolating linearly between the samples bracketing "now" moves the box continuously
+// at roughly the vehicle's real on-screen speed instead.
 function boxesAt(nowMs) {
-  const latest = new Map();
+  const byTrack = new Map();
   for (const detection of overlayDetections) {
-    if (detection.time_ms > nowMs || nowMs - detection.time_ms > OVERLAY_MAX_AGE_MS) continue;
-    const current = latest.get(detection.track_id);
-    if (!current || detection.time_ms > current.time_ms) latest.set(detection.track_id, detection);
+    if (!byTrack.has(detection.track_id)) byTrack.set(detection.track_id, []);
+    byTrack.get(detection.track_id).push(detection);
   }
-  return [...latest.values()];
+  const boxes = [];
+  for (const detections of byTrack.values()) {
+    let before = null;
+    let after = null;
+    for (const detection of detections) {
+      if (detection.time_ms <= nowMs && (!before || detection.time_ms > before.time_ms)) {
+        before = detection;
+      }
+      if (detection.time_ms > nowMs && (!after || detection.time_ms < after.time_ms)) {
+        after = detection;
+      }
+    }
+    if (!before) continue; // nothing sampled yet for this track at this point in the video
+    if (!after && nowMs - before.time_ms > OVERLAY_MAX_AGE_MS) continue; // track has gone stale
+    let bbox = before.bbox;
+    if (after) {
+      const span = after.time_ms - before.time_ms;
+      const fraction = span > 0 ? (nowMs - before.time_ms) / span : 0;
+      bbox = before.bbox.map((value, index) => value + (after.bbox[index] - value) * fraction);
+    }
+    boxes.push({ bbox, text: before.text || (after && after.text) || "" });
+  }
+  return boxes;
 }
 
 function drawOverlay() {
