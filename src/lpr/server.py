@@ -80,8 +80,11 @@ def load_runtime_config() -> RuntimeConfig:
 
 
 def resolve_model_path(path: str | Path) -> Path:
-    """Resolve a best.pt path or extract it from a training archive."""
+    """Resolve a best.pt path, an exported-model directory (e.g. OpenVINO), or extract
+    best.pt from a training archive."""
     candidate = Path(path).expanduser()
+    if candidate.is_dir():
+        return candidate.resolve()
     if candidate.is_file() and candidate.suffix.lower() != ".zip":
         return candidate.resolve()
     if candidate.is_file() and candidate.suffix.lower() == ".zip":

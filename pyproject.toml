@@ -13,6 +13,9 @@ dependencies = [
 vision = [
     "ultralytics>=8.3",
 ]
+openvino = [
+    "openvino>=2024.0",
+]
 dataset = [
     "roboflow>=1.2",
 ]

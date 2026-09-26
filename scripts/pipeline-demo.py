@@ -858,7 +858,10 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default="outputs/citd-yolo11s-training.zip",
-        help="YOLO weights (best.pt) or a training archive containing one",
+        help="YOLO weights (best.pt), a training archive containing one, or an exported-model "
+        "directory (e.g. an OpenVINO export from scripts/export-yolo-openvino.py - about 3-4x "
+        "faster per frame on CPU here, but its confidence scores run a little low, so pair it "
+        "with a slightly lower --confidence, e.g. 0.35 instead of 0.4)",
     )
     parser.add_argument(
         "--rec-model-dir",
