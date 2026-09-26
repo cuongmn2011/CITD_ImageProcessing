@@ -47,6 +47,10 @@ PAGE = """<!doctype html>
           cursor: pointer; }
   .drop.over { background: #eef; }
   img.result, video { max-width: 100%; margin-top: 1rem; border: 1px solid #ccc; }
+  .video-live { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .video-live .video-frame { flex: 2; min-width: 280px; }
+  .video-live .video-frame img.result, .video-live .video-frame video { margin-top: 0; }
+  #track-table { flex: 1; width: auto; min-width: 220px; margin-top: 0; }
   .plate { font-size: 1.5rem; font-weight: 700; letter-spacing: .08em; padding: .5rem 0;
            border-bottom: 1px solid #ddd; }
   .muted { color: #555; font-size: .9rem; font-weight: 400; letter-spacing: 0; }
@@ -109,14 +113,17 @@ PAGE = """<!doctype html>
   <div id="video-status"></div>
   <progress id="video-progress" max="1" value="0" hidden></progress>
   <button id="stop-button" hidden>Dừng (giữ kết quả đã xử lý)</button>
-  <img id="live-frame" class="result" hidden alt="frame đang xử lý">
-  <video id="video-result" controls hidden></video>
+  <div class="video-live">
+    <div class="video-frame">
+      <img id="live-frame" class="result" hidden alt="frame đang xử lý">
+      <video id="video-result" controls hidden></video>
+    </div>
+    <table id="track-table" hidden>
+      <thead><tr><th>Ảnh biển</th><th>Biển số đã chốt</th><th>Thời điểm</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
   <p id="video-download" hidden></p>
-  <table id="track-table" hidden>
-    <thead><tr><th>Xe</th><th>Ảnh biển</th><th>Biển số đọc được</th><th>Trạng thái</th>
-      <th>Thời điểm</th></tr></thead>
-    <tbody></tbody>
-  </table>
   <div id="score-box" hidden>
     <h3>Chấm điểm</h3>
     <p class="muted">Dán danh sách biển số thật xuất hiện trong video, mỗi dòng một biển.</p>
@@ -202,31 +209,25 @@ function renderTracks(jobId, tracks) {
   const table = $("track-table");
   const body = table.querySelector("tbody");
   body.textContent = "";
-  table.hidden = tracks.length === 0;
-  // Newest vehicle first, so the row for what is on screen now is at the top.
-  for (const track of [...tracks].reverse()) {
+  // Only vehicles with a locked-in reading; unstable ones are still being voted on.
+  const stable = tracks.filter((track) => track.stable);
+  table.hidden = stable.length === 0;
+  // Newest locked-in vehicle first, so what just appeared is at the top.
+  for (const track of [...stable].reverse()) {
     const row = document.createElement("tr");
-    // A vehicle the tracker lost and picked up again lists every track id it was joined from.
-    const ids = track.track_ids && track.track_ids.length ? track.track_ids : [track.track_id];
-    const cells = [ids.join(" + "), "", track.text || "(chưa đọc được)",
-      track.stable ? "đã chốt" : "chưa chốt",
-      `${formatTime(track.first_time_ms)} – ${formatTime(track.last_time_ms)}`];
-    cells.forEach((value, index) => {
-      const cell = document.createElement("td");
-      if (index === 1) {
-        const image = document.createElement("img");
-        // The crop improves while the vehicle is tracked; the version tag refreshes it.
-        image.src = `/api/video/${jobId}/crop/${track.track_id}.jpg` +
-          `?v=${track.detection_confidence}`;
-        image.alt = "biển số";
-        image.onerror = () => { image.hidden = true; };
-        cell.appendChild(image);
-      } else {
-        cell.textContent = value;
-      }
-      if (index === 2) cell.className = "text";
-      row.appendChild(cell);
-    });
+    const imageCell = document.createElement("td");
+    const image = document.createElement("img");
+    // The crop improves while the vehicle is tracked; the version tag refreshes it.
+    image.src = `/api/video/${jobId}/crop/${track.track_id}.jpg?v=${track.detection_confidence}`;
+    image.alt = "biển số";
+    image.onerror = () => { image.hidden = true; };
+    imageCell.appendChild(image);
+    const textCell = document.createElement("td");
+    textCell.className = "text";
+    textCell.textContent = track.text || "(chưa đọc được)";
+    const timeCell = document.createElement("td");
+    timeCell.textContent = `${formatTime(track.first_time_ms)} – ${formatTime(track.last_time_ms)}`;
+    row.append(imageCell, textCell, timeCell);
     body.appendChild(row);
   }
 }
@@ -243,7 +244,8 @@ async function pollJob(jobId) {
     progress.hidden = false;
     progress.max = total || 1;
     progress.value = Math.min(job.frames_done, total || 1);
-    const count = `${job.tracks.length} xe`;
+    const stableCount = job.tracks.filter((track) => track.stable).length;
+    const count = `${stableCount}/${job.tracks.length} xe đã chốt`;
     renderTracks(jobId, job.tracks);
     if (job.state === "running") {
       status.textContent = `Đang xử lý frame ${job.frames_done}/${total || "?"} · ${count}`;
