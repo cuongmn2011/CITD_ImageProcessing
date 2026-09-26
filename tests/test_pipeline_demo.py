@@ -4,6 +4,7 @@ from runpy import run_path
 
 import cv2
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from lpr.detector import PlateDetection
@@ -122,6 +123,7 @@ def test_video_job_reports_tracks_and_scores(tmp_path) -> None:
 
     assert job["state"] == "done", job["error"]
     assert job["frames_processed"] == 8
+    assert job["frontier_ms"] == pytest.approx(700.0)  # last of 8 frames at 10 fps
     assert [(track["track_id"], track["text"]) for track in job["tracks"]] == [(3, "51G48154")]
     assert client.get(f"/api/video/{job_id}/video").status_code == 200
     crop = client.get(f"/api/video/{job_id}/crop/3.jpg")

@@ -50,8 +50,10 @@ PAGE = """<!doctype html>
   img.result, video { max-width: 100%; margin-top: 1rem; border: 1px solid #ccc; }
   .video-live { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
   .video-live .video-frame { flex: 2; min-width: 280px; }
-  .video-wrap { position: relative; display: inline-block; max-width: 100%; }
-  .video-wrap video { display: block; max-width: 100%; margin-top: 0; }
+  /* block, not inline-block: a shrink-to-fit wrap can't resolve the video's max-width:100%
+     against its own auto width, so the video would render at full native size uncapped. */
+  .video-wrap { position: relative; }
+  .video-wrap video { display: block; width: 100%; height: auto; margin-top: 0; }
   .video-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
                         pointer-events: none; }
   #track-table { flex: 1; width: auto; min-width: 220px; margin-top: 0; }
@@ -84,8 +86,10 @@ PAGE = """<!doctype html>
 </section>
 
 <section id="video-section" hidden>
-  <p>Chọn file video: video phát ngay bình thường, việc nhận diện và đọc biển số chạy
-    nền và biển số hiện dần bên phải khi đọc xong.</p>
+  <p>Chọn file video: video của bạn phát ngay, có khung khoanh biển số đè lên. Máy xử lý
+    chậm hơn video thật nhiều lần, nên video sẽ tự dừng ngắn mỗi khi phát tới chỗ chưa xử
+    lý xong, rồi tự chạy tiếp khi có dữ liệu - để khung luôn khoanh đúng chỗ đang chiếu.
+    Biển số hiện dần bên phải khi đọc xong.</p>
   <p>
     <label>Bỏ bớt frame:
       <select id="stride">
@@ -261,6 +265,36 @@ async function fetchDetections(jobId) {
 // The box for a track stays on screen until a newer read arrives or this much time has
 // passed, so a plate does not visibly freeze in place once the track stops being sampled.
 const OVERLAY_MAX_AGE_MS = 700;
+// How far the source video has actually been analyzed, and whether more is still coming.
+let frontierMs = 0;
+let jobRunning = false;
+let waitingForData = false;
+
+// Background processing runs far slower than the video's own real-time playback (about
+// 10x on a typical CPU), so unthrottled playback would race far ahead of what has been
+// analyzed and the overlay would have nothing to draw. Pausing at the processed edge and
+// resuming once more of the video has been analyzed keeps the box synced to what is
+// actually on screen, at the cost of no longer playing at a smooth, constant pace.
+function throttlePlayback() {
+  const video = $("video-result");
+  if (video.hidden) return;
+  if (!jobRunning) {
+    if (waitingForData) {
+      waitingForData = false;
+      video.play().catch(() => {});
+    }
+    return;
+  }
+  const nowMs = video.currentTime * 1000;
+  const guardMs = 150; // small cushion so it does not stutter right at the processed edge
+  if (!video.paused && nowMs >= frontierMs - guardMs) {
+    video.pause();
+    waitingForData = true;
+  } else if (waitingForData && nowMs < frontierMs - guardMs) {
+    waitingForData = false;
+    video.play().catch(() => {});
+  }
+}
 
 function boxesAt(nowMs) {
   const latest = new Map();
@@ -273,6 +307,7 @@ function boxesAt(nowMs) {
 }
 
 function drawOverlay() {
+  throttlePlayback();
   const video = $("video-result");
   const canvas = $("video-overlay");
   if (!video.hidden && video.videoWidth) {
@@ -310,6 +345,8 @@ async function pollJob(jobId) {
   try {
     const job = await readJson(await fetch(`/api/video/${jobId}`));
     await fetchDetections(jobId);
+    frontierMs = job.frontier_ms || 0;
+    jobRunning = job.state === "running";
     const total = job.frames_total || 0;
     progress.hidden = false;
     progress.max = total || 1;
@@ -318,8 +355,9 @@ async function pollJob(jobId) {
     const count = `${stableCount}/${job.tracks.length} xe đã chốt`;
     renderTracks(jobId, job.tracks);
     if (job.state === "running") {
+      const behind = waitingForData ? " · video tạm dừng, chờ xử lý kịp" : "";
       status.textContent = `Đang đọc biển số nền: frame ${job.frames_done}/${total || "?"}` +
-        ` · ${count}`;
+        ` · ${count}${behind}`;
       $("stop-button").hidden = false;
       setTimeout(() => pollJob(jobId), 500);
       return;
@@ -372,6 +410,9 @@ async function sendVideo(file) {
   $("track-table").hidden = true;
   overlayDetections = [];
   detectionsCursor = 0;
+  frontierMs = 0;
+  jobRunning = true;
+  waitingForData = false;
   const startSeconds = Number($("start").value) || 0;
   playLocally(file, startSeconds);
   status.textContent = "Video đang phát bình thường; đang tải lên để đọc biển số nền...";
@@ -464,6 +505,9 @@ class _VideoJob:
     frames_done: int = 0
     frames_total: int = 0
     frames_processed: int = 0
+    # Source-video timestamp of the newest processed frame, for the client to keep the raw
+    # local preview from playing past what the background job has actually analyzed.
+    frontier_ms: float = 0.0
     output_name: str = ""
     error: str = ""
     stopped: bool = False
@@ -489,6 +533,7 @@ class _VideoJob:
             "frames_done": self.frames_done,
             "frames_total": self.frames_total,
             "frames_processed": self.frames_processed,
+            "frontier_ms": self.frontier_ms,
             "frame_seq": self.frame_seq,
             "output_name": self.output_name,
             "error": self.error,
@@ -611,6 +656,9 @@ def create_app(
                 job.frame_seq += 1
 
         def on_plates(frame_index: int, time_ms: float, result: Any) -> None:
+            # This frame's timestamp is called for every processed frame, plates or not,
+            # so it doubles as how far into the source video the job has actually reached.
+            job.frontier_ms = time_ms
             # Raw boxes for the client's own overlay, drawn over its local copy of the
             # video; cheap to collect since detection already ran for on_progress above.
             for plate in result.plates:
