@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -135,20 +136,43 @@ class PaddleOCRBackend:
 
     name = "paddleocr"
 
-    def __init__(self, language: str = "en") -> None:
+    def __init__(
+        self,
+        language: str = "en",
+        rec_model_dir: str | None = None,
+        det_model_name: str | None = None,
+    ) -> None:
+        """``det_model_name`` picks the text detector, e.g. ``PP-OCRv5_mobile_det``, which
+        is about twice as fast on CPU as PaddleOCR's default server detector."""
         try:
             from paddleocr import PaddleOCR
         except ImportError as error:
             raise RuntimeError("Install PaddleOCR separately for this optional backend") from error
-        self._ocr = PaddleOCR(
-            lang=language,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-        )
+        kwargs: dict[str, Any] = {
+            "lang": language,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            # Paddle 3.x oneDNN crashes the CPU text detector on this backend.
+            "enable_mkldnn": False,
+        }
+        if det_model_name is not None:
+            kwargs["text_detection_model_name"] = det_model_name
+        if rec_model_dir is not None:
+            kwargs["text_recognition_model_dir"] = rec_model_dir
+            # PaddleX asserts the requested model name equals the exported model's own name,
+            # and the language default (e.g. lang="en") differs from the fine-tuned one.
+            model_name = _exported_model_name(rec_model_dir)
+            if model_name is not None:
+                kwargs["text_recognition_model_name"] = model_name
+        self._ocr = PaddleOCR(**kwargs)
 
     def recognize(self, image: np.ndarray) -> OCRResult:
         _validate_image(image)
+        if image.ndim == 2:
+            # Grayscale preprocessing variants (otsu, clahe, ...) are 2-D, but PaddleOCR's
+            # text detector unpacks an (H, W, C) shape and crashes on them.
+            image = np.repeat(image[:, :, None], 3, axis=2)
         prediction = next(iter(self._ocr.predict(image)), None)
         if prediction is None:
             return OCRResult("", 0.0, self.name)
@@ -157,6 +181,19 @@ class PaddleOCRBackend:
         return OCRResult(
             normalize_text(raw_text), float(np.mean(scores)) if scores else 0.0, self.name, raw_text
         )
+
+
+def _exported_model_name(model_dir: str) -> str | None:
+    """Read Global.model_name from an exported PaddleOCR model's inference.yml, if present."""
+    import yaml
+
+    config_path = Path(model_dir) / "inference.yml"
+    if not config_path.is_file():
+        return None
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    global_section = payload.get("Global") if isinstance(payload, dict) else None
+    name = global_section.get("model_name") if isinstance(global_section, dict) else None
+    return name if isinstance(name, str) and name else None
 
 
 def _paddle_text_and_scores(prediction: Any) -> tuple[list[str], list[float]]:

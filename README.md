@@ -105,7 +105,7 @@ No dataset, model weights, video, or generated training run is committed to Git.
 
 ## OCR training versus detector training
 
-The artifact in `outputs/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
+The artifact in `model/citd-yolo11s-training.zip` trains a one-class **plate detector** only.
 It contains bounding boxes, not plate-text transcripts, so retraining YOLO from this artifact
 cannot teach OCR to read characters. The current validation metrics (`mAP50=0.99495`,
 `mAP50-95=0.72907`) measure detection, not OCR accuracy.
@@ -115,7 +115,7 @@ First diagnose OCR on real crops with a backend that is installed:
 ```bash
 uv run lpr infer-image \
   --image path/to/car.jpg \
-  --model outputs/.lpr-model/best.pt \
+  --model model/.lpr-model/best.pt \
   --ocr easyocr \
   --variants raw,gray,otsu,adaptive,clahe
 ```
@@ -126,7 +126,7 @@ after the dataset cache is available:
 ```bash
 export ROBOFLOW_API_KEY="<your-key>"
 uv run --extra vision --extra dataset python scripts/train-yolo.py \
-  --model outputs/.lpr-model/best.pt \
+  --model model/.lpr-model/best.pt \
   --epochs 100 \
   --imgsz 960 \
   --batch -1 \
@@ -137,6 +137,75 @@ Actual OCR training requires a separate labeled set containing one plate crop an
 transcription per row, for example `crop_path,ground_truth`. Without those transcripts, improve
 OCR by selecting PaddleOCR/EasyOCR, crop quality, preprocessing, and temporal voting instead of
 claiming that detector retraining fixed recognition.
+
+## OCR training
+
+The OCR backends above are pretrained and inference-only. To fine-tune PaddleOCR's recognition
+model on Vietnamese plate characters instead of relying on a generic pretrained model, install
+the training extra:
+
+```bash
+uv sync --extra ocr-train
+```
+
+Build a PaddleX recognition dataset from two filename-labeled GitHub sources (ground truth is
+read straight from each crop's filename, for example `29A87180_1212_0.jpg`; `--no-extra-source`
+uses only the first). This needs the system `git` binary on `PATH` and network access, but no
+Roboflow API key:
+
+```bash
+uv run --extra ocr-train python scripts/prepare-ocr-dataset.py
+```
+
+The source repo has no LICENSE file — see [docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md)
+for the academic/non-commercial-only caveat before using it beyond this project.
+
+Fine-tune locally on CPU (the `paddlex` pip package is inference-only; training uses the
+`PaddleOCR` training plugin, installed automatically on first run via
+`python -m paddlex --install PaddleOCR`):
+
+```bash
+uv pip install paddlepaddle
+uv run --extra ocr-train python scripts/train-ocr.py \
+  --dataset-dir data/processed/ocr-rec-dataset \
+  --config PP-OCRv5_mobile_rec
+```
+
+CPU training on the full ~12k-sample dataset is slow; consider a machine with an NVIDIA GPU
+(`--use-gpu`, plus a matching `paddlepaddle-gpu` install) for faster iteration.
+
+`--rec-model-dir` needs the exported **inference** format, not the training checkpoint. Export
+`best_accuracy` with the plugin's `tools/export_model.py` (`Global.pretrained_model=<checkpoint
+prefix>`, `Global.save_inference_dir=<dir>`), which writes `inference.json`/`.pdiparams`/`.yml`.
+The Colab notebook does this for you. Then use the model at inference time:
+
+```bash
+uv run lpr infer-image \
+  --image path/to/car.jpg \
+  --model models/best.pt \
+  --ocr paddleocr \
+  --rec-model-dir path/to/inference
+```
+
+To try the OCR model alone on a cropped plate image, run
+`uv run python scripts/ocr-demo.py --model-dir path/to/inference` and open
+http://127.0.0.1:8080 (needs `uv sync --extra web --extra paddle`).
+
+To test detection plus OCR together, run
+`uv run python scripts/pipeline-demo.py --model model/citd-yolo11s-training.zip --rec-model-dir path/to/inference`
+and open http://127.0.0.1:8081 (needs `uv sync --extra web --extra paddle --extra vision`).
+The **Image** tab reads one full photo. The **Video** tab tracks each vehicle through an uploaded
+video, votes on its plate, lists one result per vehicle, and scores them against a pasted list of
+the true plates (exact accuracy, CER, misread/missed). While it runs, the page shows each
+processed frame with the YOLO boxes and each vehicle's plate crop; a start/duration setting
+limits the run to one segment, and **Stop** ends it early while keeping what was processed. Each run is kept under
+`outputs/video-jobs/<job_id>/` (annotated WebM, plate crops, `report.json`, `score.json`).
+On CPU expect roughly 0.6 s per frame; `--imgsz 960` or `1280` helps with small, distant plates
+at extra cost.
+
+The dataset source and license caveat are documented in
+[docs/ocr-dataset-selection.md](docs/ocr-dataset-selection.md). No OCR accuracy claim is made
+until a real fine-tuning run and held-out evaluation exist.
 
 ## Inference
 
@@ -215,10 +284,12 @@ uv lock --check
 
 - [Documentation index](docs/README.md)
 - [Research and dataset selection](docs/research-dataset-selection.md)
+- [OCR character dataset selection](docs/ocr-dataset-selection.md)
 - [Architecture and implementation](docs/architecture-and-implementation.md)
 - [Dataset runtime integration](docs/dataset-runtime-integration.md)
 - [Project journal and final-report guide](docs/project-journal.md)
 - [Colab/Kaggle training notebook](notebooks/train_pipeline.ipynb)
+- [Colab OCR fine-tuning notebook](notebooks/ocr_train_pipeline.ipynb)
 
 ## Current limitations
 

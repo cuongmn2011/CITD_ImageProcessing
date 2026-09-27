@@ -1,9 +1,11 @@
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 
 from lpr.ocr import (
     OCRResult,
+    PaddleOCRBackend,
     TesseractBackend,
     _paddle_text_and_scores,
     best_result,
@@ -63,3 +65,77 @@ def test_paddle_text_and_scores_stay_aligned() -> None:
     texts, scores = _paddle_text_and_scores({"rec_texts": ["", "ABC"], "rec_scores": [0.1, 0.9]})
     assert texts == ["ABC"]
     assert scores == [0.9]
+
+
+def test_paddleocr_backend_forwards_fine_tuned_rec_model_dir(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend(rec_model_dir="outputs/ocr-rec-training/best_model")
+
+    assert calls["text_recognition_model_dir"] == "outputs/ocr-rec-training/best_model"
+
+
+def test_paddleocr_backend_forwards_model_name_from_inference_yml(monkeypatch, tmp_path) -> None:
+    (tmp_path / "inference.yml").write_text(
+        "Global:\n  model_name: PP-OCRv5_mobile_rec\n", encoding="utf-8"
+    )
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend(rec_model_dir=str(tmp_path))
+
+    assert calls["text_recognition_model_name"] == "PP-OCRv5_mobile_rec"
+
+
+def test_paddleocr_backend_expands_grayscale_to_three_channels(monkeypatch) -> None:
+    seen_shapes: list[tuple[int, ...]] = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            pass
+
+        def predict(self, image):
+            seen_shapes.append(image.shape)
+            return [{"rec_texts": ["51G48154"], "rec_scores": [0.9]}]
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    result = PaddleOCRBackend().recognize(np.zeros((12, 40), dtype=np.uint8))
+
+    assert seen_shapes == [(12, 40, 3)]
+    assert result.text == "51G48154"
+
+
+def test_paddleocr_backend_omits_rec_model_dir_by_default(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend()
+
+    assert "text_recognition_model_dir" not in calls
+    assert "text_detection_model_name" not in calls
+
+
+def test_paddleocr_backend_forwards_det_model_name(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "paddleocr", SimpleNamespace(PaddleOCR=FakePaddleOCR))
+    PaddleOCRBackend(det_model_name="PP-OCRv5_mobile_det")
+
+    assert calls["text_detection_model_name"] == "PP-OCRv5_mobile_det"

@@ -6,7 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from lpr.detector import PlateDetection
 from lpr.ocr import OCRResult
-from lpr.server import create_app, frame_result_payload
+from lpr.server import create_app, frame_result_payload, resolve_model_path
 from lpr.stream import RealtimePlateRecognizer
 
 
@@ -102,3 +102,37 @@ def test_websocket_rejects_oversized_frame(monkeypatch: pytest.MonkeyPatch) -> N
             )
             websocket.send_bytes(b"1234")
             assert "exceeds" in websocket.receive_json()["message"]
+
+
+def test_resolve_model_path_accepts_a_plain_weights_file(tmp_path) -> None:
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"fake weights")
+
+    assert resolve_model_path(weights) == weights.resolve()
+
+
+def test_resolve_model_path_extracts_best_pt_from_an_archive(tmp_path) -> None:
+    import zipfile
+
+    archive = tmp_path / "training.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("run/weights/best.pt", b"fake weights")
+
+    resolved = resolve_model_path(archive)
+
+    assert resolved == tmp_path / ".lpr-model" / "best.pt"
+    assert resolved.read_bytes() == b"fake weights"
+
+
+def test_resolve_model_path_accepts_an_exported_model_directory(tmp_path) -> None:
+    # An OpenVINO (or other Ultralytics export) directory, e.g. best_openvino_model/.
+    exported = tmp_path / "best_openvino_model"
+    exported.mkdir()
+    (exported / "best.xml").write_text("<net/>", encoding="utf-8")
+
+    assert resolve_model_path(exported) == exported.resolve()
+
+
+def test_resolve_model_path_rejects_a_missing_path(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        resolve_model_path(tmp_path / "missing.pt")

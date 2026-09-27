@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_RUNS_ROOT = Path("runs/detect")
-DEFAULT_OUTPUT = Path("outputs/citd-yolo11s-training.zip")
+DEFAULT_OUTPUT = Path("model/citd-yolo11s-training.zip")
 
 
 def _latest_run(runs_root: Path) -> Path:

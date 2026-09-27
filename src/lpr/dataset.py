@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,6 +17,23 @@ DEFAULT_DATASET_CACHE_ROOT = Path("data/processed")
 DEFAULT_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "license-plates"
 DEFAULT_DATASET_FORMAT = "yolov8"
 MANIFEST_FILENAME = ".dataset-manifest.json"
+
+# OCR recognition fine-tuning dataset with filename-encoded ground truth. No LICENSE file exists
+# for this source; see docs/ocr-dataset-selection.md for the academic/non-commercial-only caveat.
+DEFAULT_OCR_DATASET_REPO = "https://github.com/lephamcong/PBL4_Deep-Learning"
+# Pinned to the commit fetched and recorded on 2026-09-16 (12,320 samples), not the moving
+# "main" branch, so the dataset stays reproducible. See docs/ocr-dataset-selection.md.
+DEFAULT_OCR_DATASET_REF = "054cc054cdc2b24305f3675a9c14832459c8f9db"
+DEFAULT_OCR_DATASET_SUBDIR = "Dataset/BiensoxeVietNam/train"
+DEFAULT_OCR_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "ocr-filename-labeled"
+GIT_MANIFEST_FILENAME = ".git-dataset-manifest.json"
+
+# Second OCR source (its valid/ split: 136 extra plate texts). No LICENSE file either; see
+# docs/ocr-dataset-selection.md.
+EXTRA_OCR_DATASET_REPO = "https://github.com/NguyenHuuThDat/LPRNet"
+EXTRA_OCR_DATASET_REF = "7e7c3982c6ce1e9dea51b3eea85f632e09d7b91c"
+EXTRA_OCR_DATASET_SUBDIR = "Dataset/BiensoxeVietNam/valid"
+EXTRA_OCR_DATASET_LOCATION = DEFAULT_DATASET_CACHE_ROOT / "ocr-filename-labeled-extra"
 
 
 class DatasetPreparationError(RuntimeError):
@@ -56,6 +74,15 @@ class PreparedDataset:
     manifest: Path
     spec: RoboflowDatasetSpec
     model_format: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedGitDataset:
+    """Validated local path and resolved commit for a git-cloned dataset subdir."""
+
+    location: Path
+    commit: str
+    manifest: Path
 
 
 def _find_data_yaml(location: Path) -> Path:
@@ -320,3 +347,81 @@ def ensure_roboflow_dataset(
         encoding="utf-8",
     )
     return PreparedDataset(destination, data_yaml, manifest_path, parsed_spec, model_format)
+
+
+def _clone_with_git(repo_url: str, ref: str, subdir: str, location: Path) -> str:
+    """Sparse-clone one subdirectory of a public git repo; return the resolved commit SHA."""
+    if shutil.which("git") is None:
+        raise DatasetPreparationError("git is required to fetch this dataset; install git")
+
+    def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+            )
+        except subprocess.CalledProcessError as error:
+            raise DatasetPreparationError(f"git {args[0]} failed: {error.stderr}") from error
+
+    # `git clone --branch` only accepts a real branch/tag name, not an arbitrary pinned commit
+    # SHA. init+fetch+checkout works for both, and GitHub allows fetching any reachable commit.
+    with tempfile.TemporaryDirectory(prefix="git-dataset-") as temporary:
+        clone_root = Path(temporary) / "repo"
+        clone_root.mkdir()
+        _run("init", cwd=clone_root)
+        _run("remote", "add", "origin", repo_url, cwd=clone_root)
+        _run("sparse-checkout", "set", subdir, cwd=clone_root)
+        _run("fetch", "--depth", "1", "--filter=blob:none", "origin", ref, cwd=clone_root)
+        _run("checkout", "FETCH_HEAD", cwd=clone_root)
+        commit = _run("rev-parse", "FETCH_HEAD", cwd=clone_root).stdout.strip()
+        source = clone_root / subdir
+        if not source.is_dir():
+            raise DatasetPreparationError(f"{subdir} does not exist in {repo_url}@{ref}")
+        location.parent.mkdir(parents=True, exist_ok=True)
+        if location.exists():
+            shutil.rmtree(location)
+        shutil.move(str(source), str(location))
+        return commit
+
+
+def ensure_git_dataset(
+    repo_url: str = DEFAULT_OCR_DATASET_REPO,
+    location: str | Path = DEFAULT_OCR_DATASET_LOCATION,
+    *,
+    ref: str = DEFAULT_OCR_DATASET_REF,
+    subdir: str = DEFAULT_OCR_DATASET_SUBDIR,
+    force: bool = False,
+) -> PreparedGitDataset:
+    """Return a cached git-sourced dataset subdir, cloning only when missing or forced."""
+    destination = Path(location).expanduser().resolve()
+    _validate_destination(destination, force=force)
+
+    manifest_path = destination / GIT_MANIFEST_FILENAME
+    manifest = _read_manifest(manifest_path)
+    cached_commit = manifest.get("commit") if manifest is not None else None
+    # `ref` matches either the string originally used to fetch, or (since `ref` can itself be a
+    # pinned commit SHA) the resolved commit already recorded — both mean "same content".
+    cache_matches = (
+        manifest is not None
+        and manifest.get("repo") == repo_url
+        and manifest.get("subdir") == subdir
+        and isinstance(cached_commit, str)
+        and (manifest.get("ref") == ref or cached_commit == ref)
+    )
+    if cache_matches and not force:
+        return PreparedGitDataset(destination, manifest["commit"], manifest_path)
+
+    if destination.exists() and any(destination.iterdir()) and not force:
+        raise DatasetPreparationError(
+            f"Dataset directory is not a valid cache: {destination}. Use --force to replace it."
+        )
+
+    commit = _clone_with_git(repo_url, ref, subdir, destination)
+    manifest_path.write_text(
+        json.dumps(
+            {"repo": repo_url, "ref": ref, "subdir": subdir, "commit": commit},
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return PreparedGitDataset(destination, commit, manifest_path)
